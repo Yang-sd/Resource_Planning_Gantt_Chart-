@@ -1,0 +1,57 @@
+:root {
+  color: #221b16;
+  font-family: 'Avenir Next', 'IBM Plex Sans', 'PingFang SC', 'Hiragino Sans GB',
+    sans-serif;
+  line-height: 1.5;
+  font-synthesis: none;
+  font-weight: 400;
+  text-rendering: optimizeLegibility;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(circle at top left, rgba(20, 184, 166, 0.18), transparent 28%),
+    radial-gradient(circle at top right, rgba(249, 115, 22, 0.16), transparent 24%),
+    linear-gradient(180deg, #f4efe6 0%, #fbf8f2 42%, #f7f3eb 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+h1,
+h2,
+h3,
+p,
+ul {
+  margin-top: 0;
+}
+
+h1,
+h2,
+h3,
+strong {
+  color: #0f172a;
+  font-family: 'Avenir Next', 'Space Grotesk', 'PingFang SC', sans-serif;
+}
+
+#root {
+  margin: 0 auto;
+  max-width: 1600px;
+  min-height: 100vh;
+}
