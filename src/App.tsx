@@ -3,6 +3,7 @@ import {
   startTransition,
   useDeferredValue,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -106,11 +107,6 @@ type TeamDraft = Pick<Team, 'name' | 'lead' | 'color'>
 
 type MemberDraft = Pick<Member, 'name' | 'role' | 'teamId' | 'avatar' | 'capacityHours'>
 
-type AccountDraft = Pick<
-  UserAccount,
-  'username' | 'password' | 'displayName' | 'role' | 'department' | 'group'
->
-
 type ContextMenuState = {
   taskId: string
   x: number
@@ -154,22 +150,6 @@ type ResourceDeleteTarget = {
   name: string
 } | null
 
-type AccountEditorState = {
-  mode: 'create' | 'edit'
-  accountId?: string
-  draft: AccountDraft
-} | null
-
-type AccountDeleteTarget = {
-  id: string
-  username: string
-} | null
-
-type LoginFormState = {
-  username: string
-  password: string
-}
-
 type DragSelectionState = {
   memberId: string
   anchorDay: number
@@ -177,6 +157,34 @@ type DragSelectionState = {
   rectLeft: number
   rectWidth: number
   dayCount: number
+} | null
+
+type TaskTimelineInteractionMode = 'move' | 'resize-start' | 'resize-end'
+
+type TaskTimelineInteractionState = {
+  taskId: string
+  mode: TaskTimelineInteractionMode
+  pointerStartX: number
+  laneWidth: number
+  dayCount: number
+  originalOwnerId: string
+  originalTeamId: string
+  originalStartOffset: number
+  originalDuration: number
+  previewOwnerId: string
+  previewTeamId: string
+  previewStartOffset: number
+  previewDuration: number
+} | null
+
+type TaskCoachState = {
+  taskId: string
+  message: string
+} | null
+
+type TimelineBrowseState = {
+  lastX: number
+  stepWidth: number
 } | null
 
 type TimelineDay = {
@@ -187,16 +195,75 @@ type TimelineDay = {
   isToday: boolean
   isFocused: boolean
   isWeekend: boolean
+  isOutsideVisibleMonth: boolean
+  isMonthStart: boolean
 }
 
 type NavSection = '总览' | '资源排期' | '项目进度' | '团队协作' | '记录中心' | '账号管理'
 type RecordView = '更新记录' | '操作记录'
+type OverviewDurationFilter = '1天' | '2-3天' | '4-7天' | '8天以上'
+type OverviewFilterMenu = 'owner' | 'status' | 'priority' | 'duration' | null
 
 const STORAGE_KEY = 'human-gantt-workbench:v4'
-const SESSION_STORAGE_KEY = 'human-gantt-session:v1'
 const BASE_DATE = new Date('2026-04-21T00:00:00+08:00')
+const TIMELINE_MIN_WINDOW_DAYS = 30
+const OVERVIEW_PAGE_SIZE = 10
 const priorityOrder: Priority[] = ['P0', 'P1', 'P2', 'P3', 'P4', 'P5']
 const CURRENT_OPERATOR = '当前用户'
+
+const SEEDED_UPDATE_RECORDS: ReleaseRecord[] = [
+  {
+    id: 'release-4',
+    version: 'v1.1.0',
+    updatedAt: '2026/04/21 19:20',
+    features: [
+      '资源排期支持按天丝滑横向浏览，优化触控板与鼠标横向滑动并降低浏览器误回退。',
+      '项目条支持停留提示、整体拖动、首尾拉伸和上下换负责人，今天日期增加淡色高亮。',
+      '导航与总览信息密度同步优化，项目清单新增项目执行周期列并提升优先级标签可读性。',
+    ],
+  },
+  {
+    id: 'release-3',
+    version: 'v1.0.0',
+    updatedAt: '2026/04/21 13:30',
+    features: [
+      '新增记录中心页面，支持按下拉框切换更新记录与操作记录。',
+      '组织管理支持团队与成员的新增、编辑、删除与安全校验。',
+      '甘特图项目条统一按照 P0 - P5 优先级颜色进行展示。',
+    ],
+  },
+  {
+    id: 'release-2',
+    version: 'v0.9.0',
+    updatedAt: '2026/04/20 17:50',
+    features: [
+      '月度资源排期视图支持整月日期展示与前后月份切换。',
+      '支持在空白日期区域拖拽创建项目周期，并直接绑定负责人。',
+      'Docker 本地部署链路可用，支持直接在本机容器中运行。',
+    ],
+  },
+  {
+    id: 'release-1',
+    version: 'v0.8.0',
+    updatedAt: '2026/04/19 16:20',
+    features: [
+      '页面整体切换为 Figma gantt dashboard 风格的中文业务界面。',
+      '项目详情编辑、本地保存与基础筛选能力完成。',
+      '团队、成员、项目三层数据结构完成建模。',
+    ],
+  },
+]
+
+const SEEDED_OPERATION_RECORDS: OperationRecord[] = [
+  {
+    id: 'operation-1',
+    actor: '系统',
+    time: '2026/04/21 13:30',
+    action: '历史迁移',
+    target: '记录中心',
+    detail: '已启用更新记录与操作记录双表视图。',
+  },
+]
 
 const priorityPalette: Record<
   Priority,
@@ -382,52 +449,44 @@ const defaultWorkspace: Workspace = {
       updatedAt: '今天 08:30',
     },
   ],
-  updateRecords: [
-    {
-      id: 'release-3',
-      version: 'v1.0.0',
-      updatedAt: '2026/04/21 13:30',
-      features: [
-        '新增记录中心页面，支持按下拉框切换更新记录与操作记录。',
-        '组织管理支持团队与成员的新增、编辑、删除与安全校验。',
-        '甘特图项目条统一按照 P0 - P5 优先级颜色进行展示。',
-      ],
-    },
-    {
-      id: 'release-2',
-      version: 'v0.9.0',
-      updatedAt: '2026/04/20 17:50',
-      features: [
-        '月度资源排期视图支持整月日期展示与前后月份切换。',
-        '支持在空白日期区域拖拽创建项目周期，并直接绑定负责人。',
-        'Docker 本地部署链路可用，支持直接在本机容器中运行。',
-      ],
-    },
-    {
-      id: 'release-1',
-      version: 'v0.8.0',
-      updatedAt: '2026/04/19 16:20',
-      features: [
-        '页面整体切换为 Figma gantt dashboard 风格的中文业务界面。',
-        '项目详情编辑、本地保存与基础筛选能力完成。',
-        '团队、成员、项目三层数据结构完成建模。',
-      ],
-    },
-  ],
-  operationRecords: [
-    {
-      id: 'operation-1',
-      actor: '系统',
-      time: '2026/04/21 13:30',
-      action: '历史迁移',
-      target: '记录中心',
-      detail: '已启用更新记录与操作记录双表视图。',
-    },
-  ],
+  updateRecords: SEEDED_UPDATE_RECORDS,
+  operationRecords: SEEDED_OPERATION_RECORDS,
+  accounts: [],
 }
 
 function cloneDefaultWorkspace() {
   return JSON.parse(JSON.stringify(defaultWorkspace)) as Workspace
+}
+
+function isReleaseRecord(value: unknown): value is ReleaseRecord {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const record = value as Partial<ReleaseRecord>
+  return (
+    typeof record.id === 'string' &&
+    typeof record.version === 'string' &&
+    typeof record.updatedAt === 'string' &&
+    Array.isArray(record.features) &&
+    record.features.every((feature) => typeof feature === 'string')
+  )
+}
+
+function mergeSeededReleaseRecords(records: unknown, seededRecords: ReleaseRecord[]) {
+  const persistedRecords = Array.isArray(records) ? records.filter(isReleaseRecord) : []
+
+  if (persistedRecords.length === 0) {
+    return seededRecords
+  }
+
+  const seededIds = new Set(seededRecords.map((record) => record.id))
+  const seededVersions = new Set(seededRecords.map((record) => record.version))
+  const customRecords = persistedRecords.filter(
+    (record) => !seededIds.has(record.id) && !seededVersions.has(record.version),
+  )
+
+  return [...seededRecords, ...customRecords]
 }
 
 function normalizeWorkspace(input: unknown) {
@@ -454,16 +513,14 @@ function normalizeWorkspace(input: unknown) {
     teams: Array.isArray(candidate.teams) ? candidate.teams : fallback.teams,
     members: Array.isArray(candidate.members) ? candidate.members : fallback.members,
     tasks: Array.isArray(candidate.tasks) ? candidate.tasks : fallback.tasks,
-    updateRecords:
-      Array.isArray(candidate.updateRecords) && candidate.updateRecords.length > 0
-        ? candidate.updateRecords
-        : fallback.updateRecords,
+    updateRecords: mergeSeededReleaseRecords(candidate.updateRecords, fallback.updateRecords),
     operationRecords:
       Array.isArray(candidate.operationRecords) && candidate.operationRecords.length > 0
         ? candidate.operationRecords
         : legacyOperationRecords.length > 0
           ? legacyOperationRecords
           : fallback.operationRecords,
+    accounts: Array.isArray(candidate.accounts) ? candidate.accounts : fallback.accounts,
   } satisfies Workspace
 }
 
@@ -509,16 +566,15 @@ function endOfMonth(date: Date) {
   return new Date(date.getFullYear(), date.getMonth() + 1, 0)
 }
 
+function isDateInsideWindow(date: Date, windowStart: Date, windowEnd: Date) {
+  const normalizedDate = normalizeDate(date)
+  return normalizedDate >= normalizeDate(windowStart) && normalizedDate <= normalizeDate(windowEnd)
+}
+
 function diffCalendarDays(later: Date, earlier: Date) {
   const laterDate = normalizeDate(later).getTime()
   const earlierDate = normalizeDate(earlier).getTime()
   return Math.round((laterDate - earlierDate) / 86_400_000)
-}
-
-function diffCalendarMonths(later: Date, earlier: Date) {
-  return (
-    (later.getFullYear() - earlier.getFullYear()) * 12 + (later.getMonth() - earlier.getMonth())
-  )
 }
 
 function addCalendarMonthsKeepingDay(date: Date, months: number) {
@@ -560,6 +616,25 @@ function formatMonthRangeLabel(date: Date) {
   return `${formatShortDateLabel(startOfMonth(date))} - ${formatShortDateLabel(endOfMonth(date))}`
 }
 
+function formatTimelineRangeLabel(startDate: Date, endDate: Date) {
+  return `${formatShortDateLabel(startDate)} - ${formatShortDateLabel(endDate)}`
+}
+
+function formatTimelineHeading(startDate: Date, endDate: Date) {
+  if (
+    startDate.getFullYear() === endDate.getFullYear() &&
+    startDate.getMonth() === endDate.getMonth()
+  ) {
+    return formatMonthHeading(startDate)
+  }
+
+  if (startDate.getFullYear() === endDate.getFullYear()) {
+    return `${startDate.getFullYear()}年${startDate.getMonth() + 1}月 - ${endDate.getMonth() + 1}月`
+  }
+
+  return `${formatMonthHeading(startDate)} - ${formatMonthHeading(endDate)}`
+}
+
 function parseDateInputValue(value: string) {
   const [year, month, day] = value.split('-').map(Number)
   return new Date(year, (month ?? 1) - 1, day ?? 1)
@@ -592,14 +667,126 @@ function getTaskEndDate(task: Pick<Task, 'startOffset' | 'duration'>) {
   return addCalendarDays(getTaskStartDate(task), Math.max(task.duration - 1, 0))
 }
 
-function buildMonthTimelineDays(monthDate: Date, focusedDate: Date) {
-  const monthStart = startOfMonth(monthDate)
-  const monthEnd = endOfMonth(monthDate)
-  const today = normalizeDate(BASE_DATE)
-  const normalizedFocus = normalizeDate(focusedDate)
+function formatTaskExecutionRange(task: Pick<Task, 'startOffset' | 'duration'>) {
+  return formatTimelineRangeLabel(getTaskStartDate(task), getTaskEndDate(task))
+}
 
-  return Array.from({ length: monthEnd.getDate() }, (_, index) => {
-    const date = addCalendarDays(monthStart, index)
+function parseTaskUpdatedAtValue(value: string) {
+  const normalized = value.trim()
+
+  const relativeMatch = normalized.match(/^(今天|昨天)\s+(\d{1,2})[:：](\d{2})$/)
+  if (relativeMatch) {
+    const [, label, hour, minute] = relativeMatch
+    const baseDate = label === '昨天' ? addCalendarDays(BASE_DATE, -1) : BASE_DATE
+    return new Date(
+      baseDate.getFullYear(),
+      baseDate.getMonth(),
+      baseDate.getDate(),
+      Number(hour),
+      Number(minute),
+    ).getTime()
+  }
+
+  const fullDateMatch = normalized.match(
+    /^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})\s+(\d{1,2})[:：](\d{2})$/,
+  )
+  if (fullDateMatch) {
+    const [, year, month, day, hour, minute] = fullDateMatch
+    return new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+    ).getTime()
+  }
+
+  const monthDayMatch = normalized.match(/^(\d{1,2})[/.-](\d{1,2})\s+(\d{1,2})[:：](\d{2})$/)
+  if (monthDayMatch) {
+    const [, month, day, hour, minute] = monthDayMatch
+    return new Date(
+      BASE_DATE.getFullYear(),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+    ).getTime()
+  }
+
+  const chineseMonthDayMatch = normalized.match(
+    /^(\d{1,2})月(\d{1,2})日?\s+(\d{1,2})[:：](\d{2})$/,
+  )
+  if (chineseMonthDayMatch) {
+    const [, month, day, hour, minute] = chineseMonthDayMatch
+    return new Date(
+      BASE_DATE.getFullYear(),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+    ).getTime()
+  }
+
+  return 0
+}
+
+function matchesOverviewDuration(duration: number, filter: OverviewDurationFilter) {
+  if (filter === '1天') {
+    return duration <= 1
+  }
+
+  if (filter === '2-3天') {
+    return duration >= 2 && duration <= 3
+  }
+
+  if (filter === '4-7天') {
+    return duration >= 4 && duration <= 7
+  }
+
+  return duration >= 8
+}
+
+function getTimelineHorizontalGestureDelta(input: {
+  ctrlKey?: boolean
+  deltaX: number
+  deltaY: number
+  shiftKey: boolean
+  target: EventTarget | null
+}) {
+  if (input.ctrlKey) {
+    return 0
+  }
+
+  const targetElement = input.target instanceof HTMLElement ? input.target : null
+  if (targetElement?.closest('input, textarea, select, [contenteditable="true"]')) {
+    return 0
+  }
+
+  const isHeaderBrowse = targetElement?.closest('.date-grid-browse') !== null
+  const isHorizontalGesture = Math.abs(input.deltaX) > Math.abs(input.deltaY) * 1.15
+
+  if (isHorizontalGesture) {
+    return input.deltaX
+  }
+
+  if (input.shiftKey || isHeaderBrowse) {
+    return input.deltaY
+  }
+
+  return 0
+}
+
+function buildTimelineDays(
+  windowStart: Date,
+  windowEnd: Date,
+  focusedDate: Date | null,
+) {
+  const today = normalizeDate(BASE_DATE)
+  const normalizedFocus = focusedDate ? normalizeDate(focusedDate) : null
+  const dayCount = diffCalendarDays(windowEnd, windowStart) + 1
+
+  return Array.from({ length: dayCount }, (_, index) => {
+    const date = addCalendarDays(windowStart, index)
     const weekdayIndex = date.getDay()
     const weekdayLabel = ['日', '一', '二', '三', '四', '五', '六'][weekdayIndex] ?? '日'
 
@@ -608,9 +795,11 @@ function buildMonthTimelineDays(monthDate: Date, focusedDate: Date) {
       date,
       dayLabel: String(date.getDate()).padStart(2, '0'),
       weekdayLabel: `周${weekdayLabel}`,
-      isFocused: diffCalendarDays(date, normalizedFocus) === 0,
+      isFocused: normalizedFocus ? diffCalendarDays(date, normalizedFocus) === 0 : false,
       isToday: diffCalendarDays(date, today) === 0,
       isWeekend: weekdayIndex === 0 || weekdayIndex === 6,
+      isOutsideVisibleMonth: false,
+      isMonthStart: date.getDate() === 1,
     } satisfies TimelineDay
   })
 }
@@ -690,9 +879,15 @@ function App() {
   const [activeNav, setActiveNav] = useState<NavSection>('资源排期')
   const [recordView, setRecordView] = useState<RecordView>('更新记录')
   const [selectedTaskId, setSelectedTaskId] = useState(() => defaultWorkspace.tasks[0].id)
+  const [overviewPage, setOverviewPage] = useState(1)
   const [teamFilter, setTeamFilter] = useState('全部团队')
   const [statusFilter, setStatusFilter] = useState<'全部状态' | Status>('全部状态')
-  const [monthCursor, setMonthCursor] = useState(0)
+  const [overviewOwnerFilter, setOverviewOwnerFilter] = useState<string[]>([])
+  const [overviewStatusFilter, setOverviewStatusFilter] = useState<Status[]>([])
+  const [overviewPriorityFilter, setOverviewPriorityFilter] = useState<Priority[]>([])
+  const [overviewDurationFilter, setOverviewDurationFilter] = useState<OverviewDurationFilter[]>([])
+  const [overviewFilterMenu, setOverviewFilterMenu] = useState<OverviewFilterMenu>(null)
+  const [timelineStartDate, setTimelineStartDate] = useState(() => startOfMonth(BASE_DATE))
   const [focusedDate, setFocusedDate] = useState(() => normalizeDate(BASE_DATE))
   const [isDateJumpOpen, setIsDateJumpOpen] = useState(false)
   const [pendingDateValue, setPendingDateValue] = useState(() => formatDateInputValue(BASE_DATE))
@@ -706,10 +901,22 @@ function App() {
   const [resourceNotice, setResourceNotice] = useState<ResourceNoticeState>(null)
   const [resourceDeleteTarget, setResourceDeleteTarget] = useState<ResourceDeleteTarget>(null)
   const [dragSelection, setDragSelection] = useState<DragSelectionState>(null)
+  const [taskTimelineInteraction, setTaskTimelineInteraction] =
+    useState<TaskTimelineInteractionState>(null)
+  const [pendingTaskCoachId, setPendingTaskCoachId] = useState<string | null>(null)
+  const [taskCoach, setTaskCoach] = useState<TaskCoachState>(null)
   const deferredSearch = useDeferredValue(searchValue)
   const dragSelectionRef = useRef<DragSelectionState>(null)
+  const taskTimelineInteractionRef = useRef<TaskTimelineInteractionState>(null)
   const dateJumpRef = useRef<HTMLDivElement | null>(null)
-  const timelineScrollRef = useRef<HTMLDivElement | null>(null)
+  const overviewFilterBarRef = useRef<HTMLDivElement | null>(null)
+  const timelineGestureRegionRef = useRef<HTMLDivElement | null>(null)
+  const timelineLaneRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const timelineLaneMemberIdsRef = useRef<string[]>([])
+  const ignoreTaskClickRef = useRef(false)
+  const hasUsedTimelineGestureRef = useRef(false)
+  const timelineBrowseRef = useRef<TimelineBrowseState>(null)
+  const wheelMonthSwitchRef = useRef({ delta: 0, lastAt: 0 })
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace))
@@ -730,6 +937,10 @@ function App() {
         setIsDateJumpOpen(false)
         dragSelectionRef.current = null
         setDragSelection(null)
+        taskTimelineInteractionRef.current = null
+        setTaskTimelineInteraction(null)
+        setPendingTaskCoachId(null)
+        setTaskCoach(null)
       }
     }
 
@@ -759,6 +970,23 @@ function App() {
       window.removeEventListener('pointerdown', handlePointerDown)
     }
   }, [isDateJumpOpen])
+
+  useEffect(() => {
+    if (!overviewFilterMenu) {
+      return
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!overviewFilterBarRef.current?.contains(event.target as Node)) {
+        setOverviewFilterMenu(null)
+      }
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+    }
+  }, [overviewFilterMenu])
 
   useEffect(() => {
     const handleDeleteShortcut = (event: KeyboardEvent) => {
@@ -811,6 +1039,23 @@ function App() {
     () => Object.fromEntries(workspace.members.map((member) => [member.id, member])),
     [workspace.members],
   )
+  const tasksSnapshot = useMemo(() => {
+    if (!taskTimelineInteraction) {
+      return workspace.tasks
+    }
+
+    return workspace.tasks.map((task) =>
+      task.id === taskTimelineInteraction.taskId
+        ? {
+            ...task,
+            ownerId: taskTimelineInteraction.previewOwnerId,
+            teamId: taskTimelineInteraction.previewTeamId,
+            startOffset: taskTimelineInteraction.previewStartOffset,
+            duration: taskTimelineInteraction.previewDuration,
+          }
+        : task,
+    )
+  }, [taskTimelineInteraction, workspace.tasks])
   const teamStats = useMemo(
     () =>
       Object.fromEntries(
@@ -818,66 +1063,202 @@ function App() {
           team.id,
           {
             memberCount: workspace.members.filter((member) => member.teamId === team.id).length,
-            taskCount: workspace.tasks.filter((task) => task.teamId === team.id).length,
+            taskCount: tasksSnapshot.filter((task) => task.teamId === team.id).length,
           },
         ]),
       ),
-    [workspace.members, workspace.tasks, workspace.teams],
+    [tasksSnapshot, workspace.members, workspace.teams],
   )
   const memberTaskCounts = useMemo(
     () =>
       Object.fromEntries(
         workspace.members.map((member) => [
           member.id,
-          workspace.tasks.filter((task) => task.ownerId === member.id).length,
+          tasksSnapshot.filter((task) => task.ownerId === member.id).length,
         ]),
       ),
-    [workspace.members, workspace.tasks],
+    [tasksSnapshot, workspace.members],
   )
-
-  const selectedTask =
-    workspace.tasks.find((task) => task.id === selectedTaskId) ?? workspace.tasks[0] ?? null
   const visibleMonthStart = useMemo(
-    () => addCalendarMonths(startOfMonth(BASE_DATE), monthCursor),
-    [monthCursor],
+    () => normalizeDate(timelineStartDate),
+    [timelineStartDate],
   )
-  const visibleMonthEnd = useMemo(() => endOfMonth(visibleMonthStart), [visibleMonthStart])
+  const timelineWindowDayCount = useMemo(
+    () => Math.max(TIMELINE_MIN_WINDOW_DAYS, endOfMonth(visibleMonthStart).getDate()),
+    [visibleMonthStart],
+  )
+  const visibleMonthEnd = useMemo(
+    () => addCalendarDays(visibleMonthStart, timelineWindowDayCount - 1),
+    [timelineWindowDayCount, visibleMonthStart],
+  )
+  const isFocusedDateInVisibleMonth = isDateInsideWindow(
+    focusedDate,
+    visibleMonthStart,
+    visibleMonthEnd,
+  )
   const timelineDays = useMemo(
-    () => buildMonthTimelineDays(visibleMonthStart, focusedDate),
-    [focusedDate, visibleMonthStart],
+    () =>
+      buildTimelineDays(
+        visibleMonthStart,
+        visibleMonthEnd,
+        isFocusedDateInVisibleMonth ? focusedDate : null,
+      ),
+    [focusedDate, isFocusedDateInVisibleMonth, visibleMonthEnd, visibleMonthStart],
   )
   const focusedDayIndex = diffCalendarDays(focusedDate, visibleMonthStart)
-  const isFocusedDateVisible = focusedDayIndex >= 0 && focusedDayIndex < timelineDays.length
+  const isFocusedDateVisible =
+    isFocusedDateInVisibleMonth && focusedDayIndex >= 0 && focusedDayIndex < timelineDays.length
+  const todayDayIndex = diffCalendarDays(normalizeDate(BASE_DATE), visibleMonthStart)
+  const isTodayVisible = todayDayIndex >= 0 && todayDayIndex < timelineDays.length
   const timelineStyle = {
     '--days': timelineDays.length,
-    '--day-size': '42px',
-    '--name-col': '176px',
-    '--focused-day-index': String(Math.max(focusedDayIndex, 0)),
+    '--day-size': 'clamp(38px, 2.9vw, 46px)',
+    '--name-col': 'clamp(132px, 10vw, 148px)',
+    '--focused-left': `${isFocusedDateVisible ? (focusedDayIndex / timelineDays.length) * 100 : 0}%`,
+    '--focused-width': `${100 / timelineDays.length}%`,
     '--focus-opacity': isFocusedDateVisible ? 1 : 0,
+    '--today-left': `${isTodayVisible ? (todayDayIndex / timelineDays.length) * 100 : 0}%`,
+    '--today-width': `${100 / timelineDays.length}%`,
+    '--today-opacity': isTodayVisible ? 1 : 0,
   } as CSSProperties
 
   const normalizedSearch = deferredSearch.trim().toLowerCase()
+  const overviewDurationOptions: OverviewDurationFilter[] = ['1天', '2-3天', '4-7天', '8天以上']
+  const resetOverviewPage = () => setOverviewPage(1)
+  const toggleOverviewOwnerFilter = (ownerId: string) => {
+    setOverviewOwnerFilter((current) =>
+      current.includes(ownerId) ? current.filter((item) => item !== ownerId) : [...current, ownerId],
+    )
+    resetOverviewPage()
+  }
+  const toggleOverviewStatusFilter = (status: Status) => {
+    setOverviewStatusFilter((current) =>
+      current.includes(status) ? current.filter((item) => item !== status) : [...current, status],
+    )
+    resetOverviewPage()
+  }
+  const toggleOverviewPriorityFilter = (priority: Priority) => {
+    setOverviewPriorityFilter((current) =>
+      current.includes(priority) ? current.filter((item) => item !== priority) : [...current, priority],
+    )
+    resetOverviewPage()
+  }
+  const toggleOverviewDurationFilter = (durationOption: OverviewDurationFilter) => {
+    setOverviewDurationFilter((current) =>
+      current.includes(durationOption)
+        ? current.filter((item) => item !== durationOption)
+        : [...current, durationOption],
+    )
+    resetOverviewPage()
+  }
+  const clearOverviewOwnerFilter = () => {
+    setOverviewOwnerFilter([])
+    resetOverviewPage()
+  }
+  const clearOverviewStatusFilter = () => {
+    setOverviewStatusFilter([])
+    resetOverviewPage()
+  }
+  const clearOverviewPriorityFilter = () => {
+    setOverviewPriorityFilter([])
+    resetOverviewPage()
+  }
+  const clearOverviewDurationFilter = () => {
+    setOverviewDurationFilter([])
+    resetOverviewPage()
+  }
+  const clearOverviewFilters = () => {
+    setSearchValue('')
+    setTeamFilter('全部团队')
+    setOverviewOwnerFilter([])
+    setOverviewStatusFilter([])
+    setOverviewPriorityFilter([])
+    setOverviewDurationFilter([])
+    setOverviewPage(1)
+  }
+  const hasOverviewFilters =
+    normalizedSearch.length > 0 ||
+    teamFilter !== '全部团队' ||
+    overviewOwnerFilter.length > 0 ||
+    overviewStatusFilter.length > 0 ||
+    overviewPriorityFilter.length > 0 ||
+    overviewDurationFilter.length > 0
+  const overviewOwnerSummary =
+    overviewOwnerFilter.length === 0 ? '全部负责人' : `负责人 ${overviewOwnerFilter.length}`
+  const overviewStatusSummary =
+    overviewStatusFilter.length === 0 ? '全部状态' : `状态 ${overviewStatusFilter.length}`
+  const overviewPrioritySummary =
+    overviewPriorityFilter.length === 0 ? '全部优先级' : `优先级 ${overviewPriorityFilter.length}`
+  const overviewDurationSummary =
+    overviewDurationFilter.length === 0 ? '全部周期' : `周期 ${overviewDurationFilter.length}`
   const overviewTasks = useMemo(() => {
-    return workspace.tasks.filter((task) => {
-      const member = membersById[task.ownerId]
-      const team = teamsById[task.teamId]
-      const matchesSearch =
-        !normalizedSearch ||
-        task.title.toLowerCase().includes(normalizedSearch) ||
-        task.summary.toLowerCase().includes(normalizedSearch) ||
-        member?.name.toLowerCase().includes(normalizedSearch) ||
-        team?.name.toLowerCase().includes(normalizedSearch)
+    return tasksSnapshot
+      .filter((task) => {
+        const member = membersById[task.ownerId]
+        const matchesSearch =
+          !normalizedSearch ||
+          task.title.toLowerCase().includes(normalizedSearch) ||
+          member?.name.toLowerCase().includes(normalizedSearch)
 
-      const matchesTeam = teamFilter === '全部团队' || task.teamId === teamFilter
-      return matchesSearch && matchesTeam
-    })
-  }, [membersById, normalizedSearch, teamFilter, teamsById, workspace.tasks])
+        const matchesTeam = teamFilter === '全部团队' || task.teamId === teamFilter
+        const matchesOwner =
+          overviewOwnerFilter.length === 0 || overviewOwnerFilter.includes(task.ownerId)
+        const matchesStatus =
+          overviewStatusFilter.length === 0 || overviewStatusFilter.includes(task.status)
+        const matchesPriority =
+          overviewPriorityFilter.length === 0 || overviewPriorityFilter.includes(task.priority)
+        const matchesDuration =
+          overviewDurationFilter.length === 0 ||
+          overviewDurationFilter.some((filter) => matchesOverviewDuration(task.duration, filter))
+
+        return (
+          matchesSearch &&
+          matchesTeam &&
+          matchesOwner &&
+          matchesStatus &&
+          matchesPriority &&
+          matchesDuration
+        )
+      })
+      .sort((left, right) => {
+        const updatedAtDelta =
+          parseTaskUpdatedAtValue(right.updatedAt) - parseTaskUpdatedAtValue(left.updatedAt)
+        if (updatedAtDelta !== 0) {
+          return updatedAtDelta
+        }
+
+        return right.startOffset - left.startOffset
+      })
+  }, [
+    membersById,
+    normalizedSearch,
+    overviewDurationFilter,
+    overviewOwnerFilter,
+    overviewPriorityFilter,
+    overviewStatusFilter,
+    tasksSnapshot,
+    teamFilter,
+  ])
+  const overviewTotalPages = Math.max(1, Math.ceil(overviewTasks.length / OVERVIEW_PAGE_SIZE))
+  const effectiveOverviewPage = Math.min(overviewPage, overviewTotalPages)
+  const overviewVisibleTasks = useMemo(() => {
+    const startIndex = (effectiveOverviewPage - 1) * OVERVIEW_PAGE_SIZE
+    return overviewTasks.slice(startIndex, startIndex + OVERVIEW_PAGE_SIZE)
+  }, [effectiveOverviewPage, overviewTasks])
+  const overviewVisibleRangeStart =
+    overviewTasks.length === 0 ? 0 : (effectiveOverviewPage - 1) * OVERVIEW_PAGE_SIZE + 1
+  const overviewVisibleRangeEnd =
+    overviewTasks.length === 0
+      ? 0
+      : Math.min(effectiveOverviewPage * OVERVIEW_PAGE_SIZE, overviewTasks.length)
+  const overviewSelectedTaskId = overviewVisibleTasks.some((task) => task.id === selectedTaskId)
+    ? selectedTaskId
+    : overviewVisibleTasks[0]?.id ?? null
+  const overviewSelectedTask =
+    overviewTasks.find((task) => task.id === overviewSelectedTaskId) ?? null
   const ganttTasks = useMemo(
-    () =>
-      workspace.tasks.filter(
-        (task) => statusFilter === '全部状态' || task.status === statusFilter,
-      ),
-    [statusFilter, workspace.tasks],
+    () => tasksSnapshot.filter((task) => statusFilter === '全部状态' || task.status === statusFilter),
+    [statusFilter, tasksSnapshot],
   )
   const visibleMonthTasks = useMemo(
     () =>
@@ -889,41 +1270,49 @@ function App() {
     return workspace.members
       .map((member) => {
         const tasks = visibleMonthTasks.filter((task) => task.ownerId === member.id)
-        const bookedHours = tasks.reduce((sum, task) => sum + task.duration * 4, 0)
+        const visibleMonthBookedHours = visibleMonthTasks
+          .filter((task) => task.ownerId === member.id)
+          .reduce((sum, task) => sum + task.duration * 4, 0)
         const utilization = Math.min(
           100,
-          Math.round((bookedHours / Math.max(member.capacityHours, 1)) * 100),
+          Math.round((visibleMonthBookedHours / Math.max(member.capacityHours, 1)) * 100),
         )
 
         return {
           member,
           tasks,
           utilization,
-          freeHours: Math.max(0, member.capacityHours - bookedHours),
+          freeHours: Math.max(0, member.capacityHours - visibleMonthBookedHours),
         }
       })
   }, [visibleMonthTasks, workspace.members])
 
-  const riskTasks = workspace.tasks.filter((task) => task.status === '风险')
-  const activeTasks = workspace.tasks.filter((task) => task.status === '进行中')
+  useEffect(() => {
+    timelineLaneMemberIdsRef.current = memberRows.map((row) => row.member.id)
+  }, [memberRows])
+
+  const riskTasks = tasksSnapshot.filter((task) => task.status === '风险')
+  const activeTasks = tasksSnapshot.filter((task) => task.status === '进行中')
   const averageProgress = Math.round(
-    workspace.tasks.reduce((sum, task) => sum + task.progress, 0) /
-      Math.max(workspace.tasks.length, 1),
+    tasksSnapshot.reduce((sum, task) => sum + task.progress, 0) / Math.max(tasksSnapshot.length, 1),
   )
   const averageUtilization = Math.round(
     memberRows.reduce((sum, row) => sum + row.utilization, 0) / Math.max(memberRows.length, 1),
   )
-  const visibleMonthLabel = formatMonthHeading(visibleMonthStart)
-  const visibleMonthRange = formatMonthRangeLabel(visibleMonthStart)
-  const isCurrentMonthView =
-    visibleMonthStart.getFullYear() === BASE_DATE.getFullYear() &&
-    visibleMonthStart.getMonth() === BASE_DATE.getMonth()
+  const visibleMonthLabel = formatTimelineHeading(visibleMonthStart, visibleMonthEnd)
+  const visibleMonthRange = formatTimelineRangeLabel(visibleMonthStart, visibleMonthEnd)
+  const isCurrentMonthView = diffCalendarDays(visibleMonthStart, startOfMonth(BASE_DATE)) === 0
   const isDraggingSelection = dragSelection !== null
+  const isTaskTimelineInteracting = taskTimelineInteraction !== null
   const isRecordsPage = activeNav === '记录中心'
   const isOverviewPage = !isRecordsPage && activeNav !== '资源排期'
   const pendingJumpDate = useMemo(
-    () => resolveValidDate(pendingDateValue, focusedDate),
-    [focusedDate, pendingDateValue],
+    () =>
+      resolveValidDate(
+        pendingDateValue,
+        isFocusedDateInVisibleMonth ? focusedDate : visibleMonthStart,
+      ),
+    [focusedDate, isFocusedDateInVisibleMonth, pendingDateValue, visibleMonthStart],
   )
   const pendingJumpMonthLabel = formatMonthHeading(pendingJumpDate)
   const pendingJumpMonthRange = formatMonthRangeLabel(pendingJumpDate)
@@ -933,48 +1322,218 @@ function App() {
     setDragSelection(nextSelection)
   }
 
+  const syncTaskTimelineInteraction = (nextInteraction: TaskTimelineInteractionState) => {
+    taskTimelineInteractionRef.current = nextInteraction
+    setTaskTimelineInteraction(nextInteraction)
+  }
+
   const jumpToDate = (date: Date) => {
     const normalizedDate = normalizeDate(date)
     setFocusedDate(normalizedDate)
     setPendingDateValue(formatDateInputValue(normalizedDate))
-    setMonthCursor(diffCalendarMonths(startOfMonth(normalizedDate), startOfMonth(BASE_DATE)))
+    setTimelineStartDate(startOfMonth(normalizedDate))
+    setIsDateJumpOpen(false)
+  }
+
+  const handlePendingDateChange = (value: string) => {
+    const parsedDate = parseDateInputValue(value)
+    if (Number.isNaN(parsedDate.getTime())) {
+      setPendingDateValue(value)
+      return
+    }
+
+    jumpToDate(parsedDate)
+  }
+
+  const shiftTimelineDays = (delta: number) => {
+    if (delta === 0) {
+      return
+    }
+
+    setTimelineStartDate((current) => addCalendarDays(current, delta))
     setIsDateJumpOpen(false)
   }
 
   const shiftMonth = (delta: number) => {
-    jumpToDate(addCalendarMonthsKeepingDay(focusedDate, delta))
+    const nextMonthStart = startOfMonth(addCalendarMonths(visibleMonthStart, delta))
+    setPendingDateValue(formatDateInputValue(nextMonthStart))
+    setTimelineStartDate(nextMonthStart)
+    setIsDateJumpOpen(false)
+  }
+
+  const commitTimelineBrowse = useEffectEvent((delta: number) => {
+    shiftTimelineDays(delta)
+  })
+
+  const commitWheelMonthSwitch = (horizontalDelta: number) => {
+    const gestureRegion = timelineGestureRegionRef.current
+    const dayStepWidth = Math.max(
+      ((gestureRegion?.getBoundingClientRect().width ?? 720) / Math.max(timelineDays.length, 1)) * 0.7,
+      12,
+    )
+    const now = Date.now()
+    if (now - wheelMonthSwitchRef.current.lastAt > 180) {
+      wheelMonthSwitchRef.current.delta = 0
+    }
+
+    wheelMonthSwitchRef.current.delta += horizontalDelta
+    wheelMonthSwitchRef.current.lastAt = now
+
+    const dayShift = Math.trunc(wheelMonthSwitchRef.current.delta / dayStepWidth)
+    if (dayShift === 0) {
+      return
+    }
+
+    shiftTimelineDays(dayShift)
+    wheelMonthSwitchRef.current.delta -= dayShift * dayStepWidth
+  }
+
+  const handleTimelineWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    const horizontalDelta = getTimelineHorizontalGestureDelta({
+      ctrlKey: event.ctrlKey,
+      deltaX: event.deltaX,
+      deltaY: event.deltaY,
+      shiftKey: event.shiftKey,
+      target: event.target,
+    })
+
+    if (Math.abs(horizontalDelta) < 1) {
+      return
+    }
+
+    event.preventDefault()
+    commitWheelMonthSwitch(horizontalDelta)
+  }
+
+  const startTimelineBrowse = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return
+    }
+
+    event.preventDefault()
+    timelineBrowseRef.current = {
+      lastX: event.clientX,
+      stepWidth: Math.max(event.currentTarget.getBoundingClientRect().width / Math.max(timelineDays.length, 1), 1),
+    }
   }
 
   useEffect(() => {
-    if (activeNav !== '资源排期' || !isFocusedDateVisible) {
+    if (
+      !pendingTaskCoachId ||
+      activeNav !== '资源排期' ||
+      hasUsedTimelineGestureRef.current ||
+      isTaskTimelineInteracting
+    ) {
       return
     }
 
-    const timelineElement = timelineScrollRef.current
-    if (!timelineElement) {
-      return
-    }
-
-    const focusKey = formatDateInputValue(focusedDate)
-    const frame = window.requestAnimationFrame(() => {
-      const dayCell = timelineElement.querySelector<HTMLElement>(`[data-day-key="${focusKey}"]`)
-      if (!dayCell) {
+    const revealTimer = window.setTimeout(() => {
+      if (hasUsedTimelineGestureRef.current) {
         return
       }
 
-      const targetLeft =
-        dayCell.offsetLeft - timelineElement.clientWidth / 2 + dayCell.clientWidth / 2
-
-      timelineElement.scrollTo({
-        left: Math.max(0, targetLeft),
-        behavior: 'smooth',
+      setTaskCoach({
+        taskId: pendingTaskCoachId,
+        message: '拖动中间可改时间并移交成员，拖动两端可调整起止时间',
       })
+    }, 1500)
+
+    const hideTimer = window.setTimeout(() => {
+      setTaskCoach((current) =>
+        current?.taskId === pendingTaskCoachId ? null : current,
+      )
+    }, 4300)
+
+    return () => {
+      window.clearTimeout(revealTimer)
+      window.clearTimeout(hideTimer)
+    }
+  }, [activeNav, isTaskTimelineInteracting, pendingTaskCoachId])
+
+  useEffect(() => {
+    const handleMouseMove = (event: MouseEvent) => {
+      const currentBrowse = timelineBrowseRef.current
+      if (!currentBrowse) {
+        return
+      }
+
+      const deltaX = currentBrowse.lastX - event.clientX
+      const browseStep = Math.max(currentBrowse.stepWidth * 0.88, 18)
+      const dayShift = Math.trunc(deltaX / browseStep)
+      if (dayShift === 0) {
+        return
+      }
+
+      timelineBrowseRef.current = {
+        ...currentBrowse,
+        lastX: currentBrowse.lastX - dayShift * browseStep,
+      }
+      commitTimelineBrowse(dayShift)
+    }
+
+    const handleMouseUp = () => {
+      timelineBrowseRef.current = null
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [])
+
+  useEffect(() => {
+    const rootElement = document.documentElement
+    const bodyElement = document.body
+    const lockClassName = 'resource-swipe-lock'
+
+    if (activeNav === '资源排期') {
+      rootElement.classList.add(lockClassName)
+      bodyElement.classList.add(lockClassName)
+    } else {
+      rootElement.classList.remove(lockClassName)
+      bodyElement.classList.remove(lockClassName)
+    }
+
+    return () => {
+      rootElement.classList.remove(lockClassName)
+      bodyElement.classList.remove(lockClassName)
+    }
+  }, [activeNav])
+
+  useEffect(() => {
+    const gestureRegion = timelineGestureRegionRef.current
+    if (!gestureRegion || activeNav !== '资源排期') {
+      return
+    }
+
+    const handleNativeWheel = (event: WheelEvent) => {
+      const horizontalDelta = getTimelineHorizontalGestureDelta({
+        ctrlKey: event.ctrlKey,
+        deltaX: event.deltaX,
+        deltaY: event.deltaY,
+        shiftKey: event.shiftKey,
+        target: event.target,
+      })
+
+      if (Math.abs(horizontalDelta) < 1) {
+        return
+      }
+
+      event.preventDefault()
+    }
+
+    gestureRegion.addEventListener('wheel', handleNativeWheel, {
+      capture: true,
+      passive: false,
     })
 
     return () => {
-      window.cancelAnimationFrame(frame)
+      gestureRegion.removeEventListener('wheel', handleNativeWheel, true)
     }
-  }, [activeNav, focusedDate, isFocusedDateVisible, visibleMonthStart])
+  }, [activeNav])
 
   const appendOperationRecord = (
     action: OperationRecord['action'],
@@ -999,6 +1558,8 @@ function App() {
 
   const openRecordsCenter = (nextView: RecordView) => {
     setContextMenu(null)
+    setPendingTaskCoachId(null)
+    setTaskCoach(null)
     setRecordView(nextView)
     setActiveNav('记录中心')
     appendOperationRecord('查看', '记录中心', `打开了${nextView}页面。`)
@@ -1061,14 +1622,66 @@ function App() {
     setSelectedTaskId(newTask.id)
   }
 
-  const handleSelectTask = (taskId: string) => {
+  const handleSelectTask = (taskId: string, options?: { fromTimeline?: boolean }) => {
+    if (ignoreTaskClickRef.current) {
+      ignoreTaskClickRef.current = false
+      return
+    }
+
     startTransition(() => {
       setSelectedTaskId(taskId)
+    })
+
+    if (options?.fromTimeline && !hasUsedTimelineGestureRef.current) {
+      setPendingTaskCoachId(taskId)
+    } else {
+      setPendingTaskCoachId(null)
+      setTaskCoach(null)
+    }
+  }
+
+  const startTaskTimelineInteraction = (
+    event: ReactMouseEvent<HTMLElement>,
+    task: Task,
+    mode: TaskTimelineInteractionMode,
+  ) => {
+    if (event.button !== 0) {
+      return
+    }
+
+    const laneElement = event.currentTarget.closest('.bars-column')
+    if (!(laneElement instanceof HTMLElement)) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    setContextMenu(null)
+    setPendingTaskCoachId(null)
+    setTaskCoach(null)
+    setSelectedTaskId(task.id)
+
+    syncTaskTimelineInteraction({
+      taskId: task.id,
+      mode,
+      pointerStartX: event.clientX,
+      laneWidth: Math.max(laneElement.getBoundingClientRect().width, 1),
+      dayCount: timelineDays.length,
+      originalOwnerId: task.ownerId,
+      originalTeamId: task.teamId,
+      originalStartOffset: task.startOffset,
+      originalDuration: task.duration,
+      previewOwnerId: task.ownerId,
+      previewTeamId: task.teamId,
+      previewStartOffset: task.startOffset,
+      previewDuration: task.duration,
     })
   }
 
   const openContextMenu = (event: ReactMouseEvent, taskId: string) => {
     event.preventDefault()
+    setPendingTaskCoachId(null)
+    setTaskCoach(null)
     setSelectedTaskId(taskId)
     setContextMenu({
       taskId,
@@ -1519,6 +2132,169 @@ function App() {
     }
   }, [isDraggingSelection, membersById, statusFilter, visibleMonthStart])
 
+  useEffect(() => {
+    if (!isTaskTimelineInteracting) {
+      return
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const currentInteraction = taskTimelineInteractionRef.current
+      if (!currentInteraction) {
+        return
+      }
+
+      const stepWidth = currentInteraction.laneWidth / Math.max(currentInteraction.dayCount, 1)
+      const dayDelta = Math.round((event.clientX - currentInteraction.pointerStartX) / stepWidth)
+
+      let previewStartOffset = currentInteraction.originalStartOffset
+      let previewDuration = currentInteraction.originalDuration
+      let previewOwnerId = currentInteraction.previewOwnerId
+      let previewTeamId = currentInteraction.previewTeamId
+
+      if (currentInteraction.mode === 'move') {
+        previewStartOffset = currentInteraction.originalStartOffset + dayDelta
+        let hoveredOwner = null as Member | null
+
+        for (const memberId of timelineLaneMemberIdsRef.current) {
+          const laneElement = timelineLaneRefs.current[memberId]
+          if (!laneElement) {
+            continue
+          }
+
+          const rect = laneElement.getBoundingClientRect()
+          if (event.clientY >= rect.top && event.clientY <= rect.bottom) {
+            hoveredOwner = membersById[memberId] ?? null
+            break
+          }
+        }
+
+        if (hoveredOwner) {
+          previewOwnerId = hoveredOwner.id
+          previewTeamId = hoveredOwner.teamId
+        }
+      } else if (currentInteraction.mode === 'resize-start') {
+        const maxStartOffset =
+          currentInteraction.originalStartOffset + currentInteraction.originalDuration - 1
+        previewStartOffset = Math.min(
+          currentInteraction.originalStartOffset + dayDelta,
+          maxStartOffset,
+        )
+        previewDuration =
+          currentInteraction.originalDuration +
+          (currentInteraction.originalStartOffset - previewStartOffset)
+      } else {
+        previewDuration = Math.max(1, currentInteraction.originalDuration + dayDelta)
+      }
+
+      if (
+        previewOwnerId === currentInteraction.previewOwnerId &&
+        previewTeamId === currentInteraction.previewTeamId &&
+        previewStartOffset === currentInteraction.previewStartOffset &&
+        previewDuration === currentInteraction.previewDuration
+      ) {
+        return
+      }
+
+      if (
+        previewOwnerId !== currentInteraction.originalOwnerId ||
+        previewStartOffset !== currentInteraction.originalStartOffset ||
+        previewDuration !== currentInteraction.originalDuration
+      ) {
+        hasUsedTimelineGestureRef.current = true
+      }
+
+      setTaskCoach(null)
+      syncTaskTimelineInteraction({
+        ...currentInteraction,
+        previewOwnerId,
+        previewTeamId,
+        previewStartOffset,
+        previewDuration,
+      })
+    }
+
+    const handleMouseUp = () => {
+      const currentInteraction = taskTimelineInteractionRef.current
+      syncTaskTimelineInteraction(null)
+
+      if (!currentInteraction) {
+        return
+      }
+
+      const hasChanged =
+        currentInteraction.previewOwnerId !== currentInteraction.originalOwnerId ||
+        currentInteraction.previewStartOffset !== currentInteraction.originalStartOffset ||
+        currentInteraction.previewDuration !== currentInteraction.originalDuration
+
+      ignoreTaskClickRef.current = hasChanged
+
+      if (!hasChanged) {
+        return
+      }
+
+      const previousTask = workspace.tasks.find((task) => task.id === currentInteraction.taskId)
+      if (!previousTask) {
+        return
+      }
+
+      const nextStartDate = getTaskStartDate({
+        startOffset: currentInteraction.previewStartOffset,
+      })
+      const nextEndDate = getTaskEndDate({
+        startOffset: currentInteraction.previewStartOffset,
+        duration: currentInteraction.previewDuration,
+      })
+      const previousStartDate = getTaskStartDate(previousTask)
+      const previousEndDate = getTaskEndDate(previousTask)
+      const previousOwner = membersById[previousTask.ownerId]
+      const nextOwner = membersById[currentInteraction.previewOwnerId]
+      const ownerChanged = currentInteraction.previewOwnerId !== currentInteraction.originalOwnerId
+      const scheduleChanged =
+        currentInteraction.previewStartOffset !== currentInteraction.originalStartOffset ||
+        currentInteraction.previewDuration !== currentInteraction.originalDuration
+
+      let detail = `已将项目时间调整为 ${formatShortDateLabel(nextStartDate)} - ${formatShortDateLabel(nextEndDate)}。`
+
+      if (ownerChanged) {
+        detail = scheduleChanged
+          ? `已将项目从 ${previousOwner?.name ?? '原负责人'} 调整给 ${nextOwner?.name ?? '当前负责人'}，排期同步为 ${formatShortDateLabel(nextStartDate)} - ${formatShortDateLabel(nextEndDate)}。`
+          : `已将项目从 ${previousOwner?.name ?? '原负责人'} 调整给 ${nextOwner?.name ?? '当前负责人'}，时间保持 ${formatShortDateLabel(nextStartDate)} - ${formatShortDateLabel(nextEndDate)}。`
+      } else if (currentInteraction.mode === 'move') {
+        detail = `已将项目整体平移到 ${formatShortDateLabel(nextStartDate)} - ${formatShortDateLabel(nextEndDate)}，原计划为 ${formatShortDateLabel(previousStartDate)} - ${formatShortDateLabel(previousEndDate)}。`
+      } else if (currentInteraction.mode === 'resize-start') {
+        detail = `已将项目开始时间调整为 ${formatShortDateLabel(nextStartDate)}，结束时间保持到 ${formatShortDateLabel(nextEndDate)}。`
+      } else if (currentInteraction.mode === 'resize-end') {
+        detail = `已将项目结束时间调整为 ${formatShortDateLabel(nextEndDate)}，当前总工期为 ${currentInteraction.previewDuration} 天。`
+      }
+
+      setWorkspace((current) => ({
+        ...current,
+        tasks: current.tasks.map((task) =>
+          task.id === currentInteraction.taskId
+            ? {
+                ...task,
+                ownerId: currentInteraction.previewOwnerId,
+                teamId: currentInteraction.previewTeamId,
+                startOffset: currentInteraction.previewStartOffset,
+                duration: currentInteraction.previewDuration,
+                updatedAt: formatTimeLabel(),
+              }
+            : task,
+        ),
+      }))
+
+      appendOperationRecord('修改', `项目 / ${previousTask.title}`, detail)
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isTaskTimelineInteracting, membersById, workspace.tasks])
+
   const handleSaveEdit = () => {
     if (!editModal) {
       return
@@ -1648,9 +2424,17 @@ function App() {
             <button
               key={item}
               className={activeNav === item ? 'nav-item is-active' : 'nav-item'}
-              onClick={() =>
-                item === '记录中心' ? openRecordsCenter('更新记录') : setActiveNav(item)
-              }
+              onClick={() => {
+                setPendingTaskCoachId(null)
+                setTaskCoach(null)
+
+                if (item === '记录中心') {
+                  openRecordsCenter('更新记录')
+                  return
+                }
+
+                setActiveNav(item)
+              }}
             >
               <span className="nav-dot"></span>
               {item}
@@ -1794,27 +2578,6 @@ function App() {
                   </div>
 
                   <div className="topbar-actions">
-                    <label className="search-box" aria-label="搜索项目、成员或团队">
-                      <input
-                        value={searchValue}
-                        onChange={(event) => setSearchValue(event.target.value)}
-                        placeholder="搜索项目、成员、团队"
-                      />
-                    </label>
-
-                    <select
-                      className="toolbar-select"
-                      value={teamFilter}
-                      onChange={(event) => setTeamFilter(event.target.value)}
-                    >
-                      <option value="全部团队">全部团队</option>
-                      {workspace.teams.map((team) => (
-                        <option key={team.id} value={team.id}>
-                          {team.name}
-                        </option>
-                      ))}
-                    </select>
-
                     <button className="ghost-button" onClick={openResourceModal}>
                       组织管理
                     </button>
@@ -1858,62 +2621,239 @@ function App() {
                       <span className="summary-tag purple-tag">双指标</span>
                     </div>
                     <div className="dual-stats">
-                      <div>
-                        <strong>{averageProgress}%</strong>
-                        <span>项目进度</span>
-                      </div>
-                      <div>
-                        <strong>{averageUtilization}%</strong>
-                        <span>资源占用</span>
-                      </div>
-                    </div>
-                    <div className="mini-progress-stack">
-                      <label>
-                        进度
+                      <div className="dual-stat-card">
+                        <div className="dual-stat-head">
+                          <strong>{averageProgress}%</strong>
+                          <span>项目进度</span>
+                        </div>
                         <div className="mini-progress-bar">
                           <span style={{ width: `${averageProgress}%` }}></span>
                         </div>
-                      </label>
-                      <label>
-                        负载
+                      </div>
+                      <div className="dual-stat-card">
+                        <div className="dual-stat-head">
+                          <strong>{averageUtilization}%</strong>
+                          <span>资源占用</span>
+                        </div>
                         <div className="mini-progress-bar load-bar">
                           <span style={{ width: `${averageUtilization}%` }}></span>
                         </div>
-                      </label>
+                      </div>
                     </div>
                   </article>
                 </section>
 
                 <section className="content-grid">
                   <div className="gantt-card overview-card">
-                    <div className="card-header">
+                    <div className="card-header overview-card-header">
                       <div>
                         <p className="caps">总览列表</p>
                         <h3>项目清单与筛选结果</h3>
-                        <p className="timeline-copy">
-                          将搜索、筛选、组织管理和导出放在总览中，先看清全局，再进入资源排期专注处理时间线。
-                        </p>
                       </div>
                     </div>
 
+                    <div className="overview-filter-bar" ref={overviewFilterBarRef}>
+                      <label className="search-box overview-search-box" aria-label="模糊搜索项目名或负责人">
+                        <input
+                          value={searchValue}
+                          onChange={(event) => {
+                            setSearchValue(event.target.value)
+                            resetOverviewPage()
+                          }}
+                          placeholder="搜索项目名、负责人"
+                        />
+                      </label>
+
+                      <select
+                        className="toolbar-select overview-filter-select"
+                        value={teamFilter}
+                        onChange={(event) => {
+                          setTeamFilter(event.target.value)
+                          resetOverviewPage()
+                        }}
+                      >
+                        <option value="全部团队">全部团队</option>
+                        {workspace.teams.map((team) => (
+                          <option key={team.id} value={team.id}>
+                            {team.name}
+                          </option>
+                        ))}
+                      </select>
+
+                      <div className="overview-filter-group">
+                        <button
+                          className={`overview-filter-trigger ${overviewFilterMenu === 'owner' ? 'is-open' : ''} ${overviewOwnerFilter.length > 0 ? 'is-active' : ''}`}
+                          onClick={() =>
+                            setOverviewFilterMenu((current) => (current === 'owner' ? null : 'owner'))
+                          }
+                          type="button"
+                        >
+                          <span>{overviewOwnerSummary}</span>
+                          <strong>{overviewFilterMenu === 'owner' ? '收起' : '展开'}</strong>
+                        </button>
+                        {overviewFilterMenu === 'owner' ? (
+                          <div className="overview-filter-popover">
+                            <div className="overview-filter-popover-head">
+                              <span>负责人多选</span>
+                              <button type="button" onClick={clearOverviewOwnerFilter}>
+                                清空
+                              </button>
+                            </div>
+                            <div className="overview-filter-option-list">
+                              {workspace.members.map((member) => (
+                                <label key={member.id} className="overview-filter-option">
+                                  <input
+                                    checked={overviewOwnerFilter.includes(member.id)}
+                                    onChange={() => toggleOverviewOwnerFilter(member.id)}
+                                    type="checkbox"
+                                  />
+                                  <span>{member.name}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="overview-filter-group">
+                        <button
+                          className={`overview-filter-trigger ${overviewFilterMenu === 'status' ? 'is-open' : ''} ${overviewStatusFilter.length > 0 ? 'is-active' : ''}`}
+                          onClick={() =>
+                            setOverviewFilterMenu((current) => (current === 'status' ? null : 'status'))
+                          }
+                          type="button"
+                        >
+                          <span>{overviewStatusSummary}</span>
+                          <strong>{overviewFilterMenu === 'status' ? '收起' : '展开'}</strong>
+                        </button>
+                        {overviewFilterMenu === 'status' ? (
+                          <div className="overview-filter-popover">
+                            <div className="overview-filter-popover-head">
+                              <span>状态多选</span>
+                              <button type="button" onClick={clearOverviewStatusFilter}>
+                                清空
+                              </button>
+                            </div>
+                            <div className="overview-filter-option-list">
+                              {(['计划中', '进行中', '风险', '已完成'] as Status[]).map((status) => (
+                                <label key={status} className="overview-filter-option">
+                                  <input
+                                    checked={overviewStatusFilter.includes(status)}
+                                    onChange={() => toggleOverviewStatusFilter(status)}
+                                    type="checkbox"
+                                  />
+                                  <span>{status}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="overview-filter-group">
+                        <button
+                          className={`overview-filter-trigger ${overviewFilterMenu === 'priority' ? 'is-open' : ''} ${overviewPriorityFilter.length > 0 ? 'is-active' : ''}`}
+                          onClick={() =>
+                            setOverviewFilterMenu((current) => (current === 'priority' ? null : 'priority'))
+                          }
+                          type="button"
+                        >
+                          <span>{overviewPrioritySummary}</span>
+                          <strong>{overviewFilterMenu === 'priority' ? '收起' : '展开'}</strong>
+                        </button>
+                        {overviewFilterMenu === 'priority' ? (
+                          <div className="overview-filter-popover">
+                            <div className="overview-filter-popover-head">
+                              <span>优先级多选</span>
+                              <button type="button" onClick={clearOverviewPriorityFilter}>
+                                清空
+                              </button>
+                            </div>
+                            <div className="overview-filter-option-list">
+                              {priorityOrder.map((priority) => (
+                                <label key={priority} className="overview-filter-option">
+                                  <input
+                                    checked={overviewPriorityFilter.includes(priority)}
+                                    onChange={() => toggleOverviewPriorityFilter(priority)}
+                                    type="checkbox"
+                                  />
+                                  <span>{priority}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="overview-filter-group">
+                        <button
+                          className={`overview-filter-trigger ${overviewFilterMenu === 'duration' ? 'is-open' : ''} ${overviewDurationFilter.length > 0 ? 'is-active' : ''}`}
+                          onClick={() =>
+                            setOverviewFilterMenu((current) => (current === 'duration' ? null : 'duration'))
+                          }
+                          type="button"
+                        >
+                          <span>{overviewDurationSummary}</span>
+                          <strong>{overviewFilterMenu === 'duration' ? '收起' : '展开'}</strong>
+                        </button>
+                        {overviewFilterMenu === 'duration' ? (
+                          <div className="overview-filter-popover">
+                            <div className="overview-filter-popover-head">
+                              <span>项目周期筛选</span>
+                              <button type="button" onClick={clearOverviewDurationFilter}>
+                                清空
+                              </button>
+                            </div>
+                            <div className="overview-filter-option-list">
+                              {overviewDurationOptions.map((durationOption) => (
+                                <label key={durationOption} className="overview-filter-option">
+                                  <input
+                                    checked={overviewDurationFilter.includes(durationOption)}
+                                    onChange={() => toggleOverviewDurationFilter(durationOption)}
+                                    type="checkbox"
+                                  />
+                                  <span>{durationOption}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {hasOverviewFilters ? (
+                        <button className="ghost-button overview-filter-reset" onClick={clearOverviewFilters}>
+                          清空筛选
+                        </button>
+                      ) : null}
+                    </div>
+
                     <div className="project-table overview-table">
+                      <div className="overview-meta-bar">
+                        <span>
+                          显示 {overviewVisibleRangeStart}-{overviewVisibleRangeEnd} / {overviewTasks.length} 项
+                        </span>
+                        <span>按最近更新时间倒序</span>
+                      </div>
                       <div className="table-head">
                         <span>项目</span>
                         <span>负责人</span>
                         <span>状态</span>
                         <span>优先级</span>
+                        <span>项目执行周期</span>
                         <span>里程碑</span>
                       </div>
                       {overviewTasks.length === 0 ? (
                         <div className="table-empty">没有找到符合筛选条件的项目。</div>
                       ) : (
-                        overviewTasks.map((task) => {
+                        overviewVisibleTasks.map((task) => {
                           const priorityMeta = priorityPalette[task.priority]
                           const ownerName = membersById[task.ownerId]?.name ?? '-'
+                          const executionRange = formatTaskExecutionRange(task)
+                          const executionDuration = `${Math.max(task.duration, 1)} 天`
                           return (
                             <button
                               key={task.id}
-                              className={task.id === selectedTaskId ? 'table-row is-selected' : 'table-row'}
+                              className={task.id === overviewSelectedTaskId ? 'table-row is-selected' : 'table-row'}
                               onClick={() => handleSelectTask(task.id)}
                               onContextMenu={(event) => openContextMenu(event, task.id)}
                             >
@@ -1943,6 +2883,16 @@ function App() {
                                 </em>
                               </span>
                               <span
+                                className="table-cell table-cell-center"
+                                title={`${executionRange} · ${executionDuration}`}
+                                data-tooltip={`${executionRange} · ${executionDuration}`}
+                              >
+                                <span className="table-period-stack">
+                                  <strong>{executionRange}</strong>
+                                  <small>{executionDuration}</small>
+                                </span>
+                              </span>
+                              <span
                                 className="table-cell"
                                 title={task.milestone}
                                 data-tooltip={task.milestone}
@@ -1953,6 +2903,35 @@ function App() {
                           )
                         })
                       )}
+                      {overviewTotalPages > 1 ? (
+                        <div className="table-footer">
+                          <div className="table-pagination">
+                            <button
+                              className="ghost-button table-page-button"
+                              onClick={() =>
+                                setOverviewPage((current) => Math.max(1, Math.min(current, overviewTotalPages) - 1))
+                              }
+                              disabled={effectiveOverviewPage === 1}
+                            >
+                              上一页
+                            </button>
+                            <span className="table-page-status">
+                              第 {effectiveOverviewPage} / {overviewTotalPages} 页
+                            </span>
+                            <button
+                              className="ghost-button table-page-button"
+                              onClick={() =>
+                                setOverviewPage((current) =>
+                                  Math.min(overviewTotalPages, Math.min(current, overviewTotalPages) + 1),
+                                )
+                              }
+                              disabled={effectiveOverviewPage === overviewTotalPages}
+                            >
+                              下一页
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
 
@@ -1961,51 +2940,54 @@ function App() {
                       <div className="card-header">
                         <div>
                           <p className="caps">项目摘要</p>
-                          <h3>{selectedTask?.title ?? '未选择项目'}</h3>
+                          <h3>{overviewSelectedTask?.title ?? '未选择项目'}</h3>
                         </div>
-                        {selectedTask ? (
-                          <span className={`status-chip status-${selectedTask.status}`}>
-                            {selectedTask.status}
+                        {overviewSelectedTask ? (
+                          <span className={`status-chip status-${overviewSelectedTask.status}`}>
+                            {overviewSelectedTask.status}
                           </span>
                         ) : null}
                       </div>
 
-                      {selectedTask ? (
+                      {overviewSelectedTask ? (
                         <>
                           <div className="metric-grid">
                             <div>
                               <span>所属团队</span>
-                              <strong>{teamsById[selectedTask.teamId]?.name}</strong>
+                              <strong>{teamsById[overviewSelectedTask.teamId]?.name}</strong>
                             </div>
                             <div>
                               <span>负责人</span>
-                              <strong>{membersById[selectedTask.ownerId]?.name}</strong>
+                              <strong>{membersById[overviewSelectedTask.ownerId]?.name}</strong>
                             </div>
                             <div>
                               <span>优先级</span>
-                              <strong>{selectedTask.priority}</strong>
+                              <strong>{overviewSelectedTask.priority}</strong>
                             </div>
                             <div>
                               <span>最近更新</span>
-                              <strong>{selectedTask.updatedAt}</strong>
+                              <strong>{overviewSelectedTask.updatedAt}</strong>
                             </div>
                           </div>
-                          <p className="detail-copy">{selectedTask.summary}</p>
+                          <p className="detail-copy">{overviewSelectedTask.summary}</p>
                           <div className="progress-track">
                             <span
                               style={{
-                                width: `${selectedTask.progress}%`,
-                                background: priorityPalette[selectedTask.priority].solid,
+                                width: `${overviewSelectedTask.progress}%`,
+                                background: priorityPalette[overviewSelectedTask.priority].solid,
                               }}
                             ></span>
                           </div>
                           <div className="summary-actions">
-                            <button className="ghost-button" onClick={() => openEditModal(selectedTask.id)}>
+                            <button
+                              className="ghost-button"
+                              onClick={() => openEditModal(overviewSelectedTask.id)}
+                            >
                               编辑项目
                             </button>
                             <button
                               className="danger-button"
-                              onClick={() => openDeleteConfirm(selectedTask.id)}
+                              onClick={() => openDeleteConfirm(overviewSelectedTask.id)}
                             >
                               删除项目
                             </button>
@@ -2032,13 +3014,13 @@ function App() {
               </>
             ) : (
               <section className="resource-focus-layout">
-                <div className="gantt-card gantt-card-focus">
+                <div className="gantt-card gantt-card-focus" ref={timelineGestureRegionRef}>
                   <div className="card-header">
                     <div>
                       <p className="caps">资源排期</p>
                       <h3>{visibleMonthLabel} 甘特图排期</h3>
                       <p className="timeline-copy">
-                        资源排期页只保留时间线和排期交互；点选中间日期卡可快速定位到指定年月日，并自动展示对应月份的甘特区间。
+                        资源排期页只保留时间线和排期交互；请在日期栏或时间线区域左右滑动，时间会按天平滑推进，点击上下月可快速跳到整月。
                       </p>
                     </div>
                   </div>
@@ -2057,6 +3039,11 @@ function App() {
                     </div>
 
                     <div className="month-navigator">
+                      {!isCurrentMonthView ? (
+                        <button className="icon-button" onClick={() => jumpToDate(BASE_DATE)}>
+                          回到本月
+                        </button>
+                      ) : null}
                       <button className="ghost-button" onClick={() => shiftMonth(-1)}>
                         上月
                       </button>
@@ -2067,7 +3054,11 @@ function App() {
                           aria-expanded={isDateJumpOpen}
                           aria-haspopup="dialog"
                           onClick={() => {
-                            setPendingDateValue(formatDateInputValue(focusedDate))
+                            setPendingDateValue(
+                              formatDateInputValue(
+                                isFocusedDateInVisibleMonth ? focusedDate : visibleMonthStart,
+                              ),
+                            )
                             setIsDateJumpOpen((current) => !current)
                           }}
                         >
@@ -2090,10 +3081,11 @@ function App() {
                               </div>
                               <button
                                 type="button"
-                                className="icon-button date-jump-close"
+                                className="circle-close-button date-jump-close"
+                                aria-label="关闭时间定位"
                                 onClick={() => setIsDateJumpOpen(false)}
                               >
-                                关闭
+                                <span aria-hidden="true">×</span>
                               </button>
                             </div>
 
@@ -2102,7 +3094,7 @@ function App() {
                               <input
                                 type="date"
                                 value={pendingDateValue}
-                                onChange={(event) => setPendingDateValue(event.target.value)}
+                                onChange={(event) => handlePendingDateChange(event.target.value)}
                               />
                             </label>
 
@@ -2124,22 +3116,11 @@ function App() {
                               <button
                                 type="button"
                                 className="pill"
-                                onClick={() => jumpToDate(addCalendarMonthsKeepingDay(focusedDate, 1))}
+                                onClick={() =>
+                                  jumpToDate(addCalendarMonthsKeepingDay(pendingJumpDate, 1))
+                                }
                               >
                                 下个月
-                              </button>
-                            </div>
-
-                            <div className="date-jump-footer">
-                              <p>
-                                会自动把时间线定位到 {formatShortDateLabel(pendingJumpDate)}，并高亮当天列。
-                              </p>
-                              <button
-                                type="button"
-                                className="primary-button"
-                                onClick={() => jumpToDate(pendingJumpDate)}
-                              >
-                                查看排期
                               </button>
                             </div>
                           </div>
@@ -2148,19 +3129,14 @@ function App() {
                       <button className="ghost-button" onClick={() => shiftMonth(1)}>
                         下月
                       </button>
-                      {!isCurrentMonthView ? (
-                        <button className="icon-button" onClick={() => jumpToDate(BASE_DATE)}>
-                          回到本月
-                        </button>
-                      ) : null}
                     </div>
                   </div>
 
-                  <div className="timeline-scroll" ref={timelineScrollRef}>
+                  <div className="timeline-scroll" onWheel={handleTimelineWheel}>
                     <div className="timeline-sheet" style={timelineStyle}>
                       <div className="timeline-head">
                         <div className="name-column">成员 / 项目</div>
-                        <div className="date-grid">
+                        <div className="date-grid date-grid-browse" onMouseDown={startTimelineBrowse}>
                           {timelineDays.map((day) => (
                             <span
                               key={day.key}
@@ -2170,6 +3146,8 @@ function App() {
                                 day.isFocused ? 'is-focused' : '',
                                 day.isWeekend ? 'is-weekend' : '',
                                 day.isToday ? 'is-today' : '',
+                                day.isOutsideVisibleMonth ? 'is-outside-month' : '',
+                                day.isMonthStart ? 'is-month-start' : '',
                               ]
                                 .filter(Boolean)
                                 .join(' ')}
@@ -2184,6 +3162,9 @@ function App() {
                       <div className="timeline-body">
                         {memberRows.map((row) => {
                           const hasDragPreview = dragSelection?.memberId === row.member.id
+                          const isTaskDropTarget =
+                            taskTimelineInteraction?.mode === 'move' &&
+                            taskTimelineInteraction.previewOwnerId === row.member.id
                           const previewStartDay = hasDragPreview
                             ? Math.min(dragSelection.anchorDay, dragSelection.currentDay)
                             : 0
@@ -2216,16 +3197,21 @@ function App() {
                               </div>
 
                               <div
-                                className={hasDragPreview ? 'bars-column is-selecting' : 'bars-column'}
+                                ref={(element) => {
+                                  timelineLaneRefs.current[row.member.id] = element
+                                }}
+                                className={[
+                                  'bars-column',
+                                  hasDragPreview ? 'is-selecting' : '',
+                                  isTaskDropTarget ? 'is-drop-target' : '',
+                                ]
+                                  .filter(Boolean)
+                                  .join(' ')}
                                 style={{
                                   minHeight: `${Math.max(70, rowLaneCount * 40 + 20)}px`,
                                 }}
                                 onMouseDown={(event) => handleTimelineMouseDown(row.member.id, event)}
                               >
-                                {row.tasks.length === 0 ? (
-                                  <div className="empty-row">当前月份暂无项目，可直接拖拽创建</div>
-                                ) : null}
-
                                 {hasDragPreview ? (
                                   <div
                                     className="selection-preview"
@@ -2243,7 +3229,9 @@ function App() {
                                   const taskStartDate = getTaskStartDate(task)
                                   const taskEndDate = getTaskEndDate(task)
                                   const clippedStart =
-                                    taskStartDate < visibleMonthStart ? visibleMonthStart : taskStartDate
+                                    taskStartDate < visibleMonthStart
+                                      ? visibleMonthStart
+                                      : taskStartDate
                                   const clippedEnd =
                                     taskEndDate > visibleMonthEnd ? visibleMonthEnd : taskEndDate
                                   const leftOffset = diffCalendarDays(clippedStart, visibleMonthStart)
@@ -2253,35 +3241,62 @@ function App() {
                                   const width = `${Math.max(4, (visibleDuration / timelineDays.length) * 100)}%`
                                   const owner = membersById[task.ownerId]
                                   const priorityMeta = priorityPalette[task.priority]
+                                  const isTaskSelected = task.id === selectedTaskId
+                                  const isTaskCoached = taskCoach?.taskId === task.id
+                                  const isTaskBeingManipulated =
+                                    taskTimelineInteraction?.taskId === task.id
 
                                   return (
                                     <button
                                       key={task.id}
-                                      className={task.id === selectedTaskId ? 'task-bar is-selected' : 'task-bar'}
+                                      className={[
+                                        'task-bar',
+                                        isTaskSelected ? 'is-selected' : '',
+                                        isTaskCoached ? 'is-coached' : '',
+                                        isTaskBeingManipulated ? 'is-manipulating' : '',
+                                      ]
+                                        .filter(Boolean)
+                                        .join(' ')}
                                       style={{
                                         left,
                                         width,
                                         top: `${index * 40 + 10}px`,
                                         background: priorityMeta.solid,
                                       }}
-                                      onClick={() => handleSelectTask(task.id)}
+                                      onClick={() => handleSelectTask(task.id, { fromTimeline: true })}
+                                      onMouseDown={(event) =>
+                                        startTaskTimelineInteraction(event, task, 'move')
+                                      }
                                       onContextMenu={(event) => openContextMenu(event, task.id)}
                                       aria-label={`${task.title}，负责人 ${owner?.name ?? '未分配'}，优先级 ${task.priority}，进度 ${task.progress}%`}
                                     >
-                                      <span>{task.title}</span>
-                                      <div className="task-badges">
-                                        <em
-                                          className="priority-pill"
-                                          style={{
-                                            background: priorityMeta.background,
-                                            borderColor: priorityMeta.border,
-                                            color: priorityMeta.text,
-                                          }}
-                                        >
-                                          {task.priority}
-                                        </em>
-                                        <small>{task.progress}%</small>
-                                      </div>
+                                      <span className="task-title">{task.title}</span>
+                                      <em
+                                        className="priority-pill task-priority-pill"
+                                        style={{
+                                          background: priorityMeta.background,
+                                          borderColor: priorityMeta.border,
+                                          color: priorityMeta.text,
+                                        }}
+                                      >
+                                        {task.priority}
+                                      </em>
+                                      <small className="task-progress-pill">{task.progress}%</small>
+                                      <span
+                                        className="task-resize-handle is-start"
+                                        onMouseDown={(event) =>
+                                          startTaskTimelineInteraction(event, task, 'resize-start')
+                                        }
+                                      ></span>
+                                      <span
+                                        className="task-resize-handle is-end"
+                                        onMouseDown={(event) =>
+                                          startTaskTimelineInteraction(event, task, 'resize-end')
+                                        }
+                                      ></span>
+                                      {isTaskCoached ? (
+                                        <span className="task-coach-bubble">{taskCoach.message}</span>
+                                      ) : null}
                                     </button>
                                   )
                                 })}
@@ -2320,8 +3335,8 @@ function App() {
                 <p className="caps">组织管理</p>
                 <h3>团队与成员</h3>
               </div>
-              <button className="icon-button" onClick={closeResourceModal}>
-                关闭
+              <button className="circle-close-button" aria-label="关闭组织管理" onClick={closeResourceModal}>
+                <span aria-hidden="true">×</span>
               </button>
             </div>
 
@@ -2668,8 +3683,8 @@ function App() {
                 <p className="caps">{editModal.mode === 'create' ? '新建项目' : '编辑项目'}</p>
                 <h3>{editModal.draft.title}</h3>
               </div>
-              <button className="icon-button" onClick={() => setEditModal(null)}>
-                关闭
+              <button className="circle-close-button" aria-label="关闭项目编辑弹窗" onClick={() => setEditModal(null)}>
+                <span aria-hidden="true">×</span>
               </button>
             </div>
 
