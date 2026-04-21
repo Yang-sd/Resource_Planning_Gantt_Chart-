@@ -1,5 +1,5 @@
 :root {
-  color: #221b16;
+  color: #162032;
   font-family: 'Avenir Next', 'IBM Plex Sans', 'PingFang SC', 'Hiragino Sans GB',
     sans-serif;
   line-height: 1.5;
@@ -9,9 +9,9 @@
   -moz-osx-font-smoothing: grayscale;
   -webkit-font-smoothing: antialiased;
   background:
-    radial-gradient(circle at top left, rgba(20, 184, 166, 0.18), transparent 28%),
-    radial-gradient(circle at top right, rgba(249, 115, 22, 0.16), transparent 24%),
-    linear-gradient(180deg, #f4efe6 0%, #fbf8f2 42%, #f7f3eb 100%);
+    radial-gradient(circle at top left, rgba(85, 104, 255, 0.2), transparent 24%),
+    radial-gradient(circle at top right, rgba(34, 197, 94, 0.12), transparent 22%),
+    linear-gradient(180deg, #eef3fb 0%, #f7f9fc 48%, #edf2fb 100%);
 }
 
 * {
@@ -46,7 +46,7 @@ h1,
 h2,
 h3,
 strong {
-  color: #0f172a;
+  color: #162032;
   font-family: 'Avenir Next', 'Space Grotesk', 'PingFang SC', sans-serif;
 }
 
