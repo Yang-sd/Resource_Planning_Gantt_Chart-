@@ -167,10 +167,12 @@ type TaskTimelineInteractionState = {
   pointerStartX: number
   laneWidth: number
   dayCount: number
+  originalLaneIndex: number
   originalOwnerId: string
   originalTeamId: string
   originalStartOffset: number
   originalDuration: number
+  previewLaneIndex: number
   previewOwnerId: string
   previewTeamId: string
   previewStartOffset: number
@@ -192,6 +194,8 @@ type TimelineDay = {
   date: Date
   dayLabel: string
   weekdayLabel: string
+  holidayLabel: string | null
+  isHoliday: boolean
   isToday: boolean
   isFocused: boolean
   isWeekend: boolean
@@ -203,13 +207,26 @@ type NavSection = '总览' | '资源排期' | '项目进度' | '团队协作' | 
 type RecordView = '更新记录' | '操作记录'
 type OverviewDurationFilter = '1天' | '2-3天' | '4-7天' | '8天以上'
 type OverviewFilterMenu = 'owner' | 'status' | 'priority' | 'duration' | null
+type TimelineFilterMenu = 'member' | 'holiday' | null
 
 const STORAGE_KEY = 'human-gantt-workbench:v4'
 const BASE_DATE = new Date('2026-04-21T00:00:00+08:00')
-const TIMELINE_MIN_WINDOW_DAYS = 30
+const TIMELINE_WINDOW_DAYS = 14
+const TIMELINE_WINDOW_STEP_DAYS = 7
 const OVERVIEW_PAGE_SIZE = 10
 const priorityOrder: Priority[] = ['P0', 'P1', 'P2', 'P3', 'P4', 'P5']
 const CURRENT_OPERATOR = '当前用户'
+
+const CHINA_LEGAL_HOLIDAY_PERIODS_2026 = [
+  { id: 'yuan-dan', name: '元旦', start: '2026-01-01', end: '2026-01-03' },
+  { id: 'chun-jie', name: '春节', start: '2026-02-15', end: '2026-02-23' },
+  { id: 'qing-ming', name: '清明节', start: '2026-04-04', end: '2026-04-06' },
+  { id: 'lao-dong', name: '劳动节', start: '2026-05-01', end: '2026-05-05' },
+  { id: 'duan-wu', name: '端午节', start: '2026-06-19', end: '2026-06-21' },
+  { id: 'zhong-qiu', name: '中秋节', start: '2026-09-25', end: '2026-09-27' },
+  { id: 'guo-qing', name: '国庆节', start: '2026-10-01', end: '2026-10-07' },
+] as const
+const CHINA_LEGAL_HOLIDAY_MAP_2026 = buildHolidayMap(CHINA_LEGAL_HOLIDAY_PERIODS_2026)
 
 const SEEDED_UPDATE_RECORDS: ReleaseRecord[] = [
   {
@@ -554,16 +571,19 @@ function addCalendarDays(date: Date, days: number) {
   return normalizeDate(next)
 }
 
-function addCalendarMonths(date: Date, months: number) {
-  return new Date(date.getFullYear(), date.getMonth() + months, 1)
-}
-
 function startOfMonth(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), 1)
 }
 
 function endOfMonth(date: Date) {
   return new Date(date.getFullYear(), date.getMonth() + 1, 0)
+}
+
+function startOfWeek(date: Date) {
+  const normalizedDate = normalizeDate(date)
+  const weekday = normalizedDate.getDay()
+  const offset = weekday === 0 ? -6 : 1 - weekday
+  return addCalendarDays(normalizedDate, offset)
 }
 
 function isDateInsideWindow(date: Date, windowStart: Date, windowEnd: Date) {
@@ -575,13 +595,6 @@ function diffCalendarDays(later: Date, earlier: Date) {
   const laterDate = normalizeDate(later).getTime()
   const earlierDate = normalizeDate(earlier).getTime()
   return Math.round((laterDate - earlierDate) / 86_400_000)
-}
-
-function addCalendarMonthsKeepingDay(date: Date, months: number) {
-  const source = normalizeDate(date)
-  const targetMonthStart = new Date(source.getFullYear(), source.getMonth() + months, 1)
-  const targetDay = Math.min(source.getDate(), endOfMonth(targetMonthStart).getDate())
-  return new Date(targetMonthStart.getFullYear(), targetMonthStart.getMonth(), targetDay)
 }
 
 function formatMonthHeading(date: Date) {
@@ -604,6 +617,34 @@ function formatDateInputValue(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function buildDateRangeKeys(start: string, end: string) {
+  const startDate = parseDateInputValue(start)
+  const endDate = parseDateInputValue(end)
+  const dayCount = diffCalendarDays(endDate, startDate)
+  return Array.from({ length: dayCount + 1 }, (_, index) =>
+    formatDateInputValue(addCalendarDays(startDate, index)),
+  )
+}
+
+function buildHolidayMap(
+  periods: ReadonlyArray<{ name: string; start: string; end: string }>,
+) {
+  return periods.reduce((map, period) => {
+    buildDateRangeKeys(period.start, period.end).forEach((dateKey) => {
+      const labels = map.get(dateKey) ?? []
+      map.set(dateKey, [...labels, period.name])
+    })
+    return map
+  }, new Map<string, string[]>())
+}
+
+function formatCalendarDateLabel(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}.${month}.${day}`
 }
 
 function formatShortDateLabel(date: Date) {
@@ -668,7 +709,9 @@ function getTaskEndDate(task: Pick<Task, 'startOffset' | 'duration'>) {
 }
 
 function formatTaskExecutionRange(task: Pick<Task, 'startOffset' | 'duration'>) {
-  return formatTimelineRangeLabel(getTaskStartDate(task), getTaskEndDate(task))
+  return `${formatCalendarDateLabel(getTaskStartDate(task))} ~ ${formatCalendarDateLabel(
+    getTaskEndDate(task),
+  )}`
 }
 
 function parseTaskUpdatedAtValue(value: string) {
@@ -780,6 +823,7 @@ function buildTimelineDays(
   windowStart: Date,
   windowEnd: Date,
   focusedDate: Date | null,
+  holidayMap?: Map<string, string[]>,
 ) {
   const today = normalizeDate(BASE_DATE)
   const normalizedFocus = focusedDate ? normalizeDate(focusedDate) : null
@@ -793,8 +837,10 @@ function buildTimelineDays(
     return {
       key: formatDateInputValue(date),
       date,
-      dayLabel: String(date.getDate()).padStart(2, '0'),
+      dayLabel: `${date.getMonth() + 1}.${String(date.getDate()).padStart(2, '0')}`,
       weekdayLabel: `周${weekdayLabel}`,
+      holidayLabel: holidayMap?.get(formatDateInputValue(date))?.join(' / ') ?? null,
+      isHoliday: (holidayMap?.get(formatDateInputValue(date))?.length ?? 0) > 0,
       isFocused: normalizedFocus ? diffCalendarDays(date, normalizedFocus) === 0 : false,
       isToday: diffCalendarDays(date, today) === 0,
       isWeekend: weekdayIndex === 0 || weekdayIndex === 6,
@@ -819,6 +865,12 @@ function resolveDayIndexFromPointer(
   const safeWidth = Math.max(rectWidth, 1)
   const rawIndex = Math.floor(((clientX - rectLeft) / safeWidth) * dayCount)
   return Math.max(0, Math.min(dayCount - 1, rawIndex))
+}
+
+function resolveLaneIndexFromPointer(clientY: number, rectTop: number, taskCount: number) {
+  const slotHeight = 40
+  const rawIndex = Math.floor((clientY - rectTop + slotHeight * 0.5 - 10) / slotHeight)
+  return Math.max(0, Math.min(taskCount, rawIndex))
 }
 
 function createClientId(prefix: string) {
@@ -882,12 +934,15 @@ function App() {
   const [overviewPage, setOverviewPage] = useState(1)
   const [teamFilter, setTeamFilter] = useState('全部团队')
   const [statusFilter, setStatusFilter] = useState<'全部状态' | Status>('全部状态')
+  const [timelineMemberFilter, setTimelineMemberFilter] = useState<string[]>([])
+  const [timelineFilterMenu, setTimelineFilterMenu] = useState<TimelineFilterMenu>(null)
+  const [isHolidayHighlightEnabled, setIsHolidayHighlightEnabled] = useState(true)
   const [overviewOwnerFilter, setOverviewOwnerFilter] = useState<string[]>([])
   const [overviewStatusFilter, setOverviewStatusFilter] = useState<Status[]>([])
   const [overviewPriorityFilter, setOverviewPriorityFilter] = useState<Priority[]>([])
   const [overviewDurationFilter, setOverviewDurationFilter] = useState<OverviewDurationFilter[]>([])
   const [overviewFilterMenu, setOverviewFilterMenu] = useState<OverviewFilterMenu>(null)
-  const [timelineStartDate, setTimelineStartDate] = useState(() => startOfMonth(BASE_DATE))
+  const [timelineStartDate, setTimelineStartDate] = useState(() => startOfWeek(BASE_DATE))
   const [focusedDate, setFocusedDate] = useState(() => normalizeDate(BASE_DATE))
   const [isDateJumpOpen, setIsDateJumpOpen] = useState(false)
   const [pendingDateValue, setPendingDateValue] = useState(() => formatDateInputValue(BASE_DATE))
@@ -910,6 +965,7 @@ function App() {
   const taskTimelineInteractionRef = useRef<TaskTimelineInteractionState>(null)
   const dateJumpRef = useRef<HTMLDivElement | null>(null)
   const overviewFilterBarRef = useRef<HTMLDivElement | null>(null)
+  const timelineFilterBarRef = useRef<HTMLDivElement | null>(null)
   const timelineGestureRegionRef = useRef<HTMLDivElement | null>(null)
   const timelineLaneRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const timelineLaneMemberIdsRef = useRef<string[]>([])
@@ -935,6 +991,7 @@ function App() {
         setResourceNotice(null)
         setResourceDeleteTarget(null)
         setIsDateJumpOpen(false)
+        setTimelineFilterMenu(null)
         dragSelectionRef.current = null
         setDragSelection(null)
         taskTimelineInteractionRef.current = null
@@ -987,6 +1044,23 @@ function App() {
       window.removeEventListener('pointerdown', handlePointerDown)
     }
   }, [overviewFilterMenu])
+
+  useEffect(() => {
+    if (!timelineFilterMenu) {
+      return
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!timelineFilterBarRef.current?.contains(event.target as Node)) {
+        setTimelineFilterMenu(null)
+      }
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown)
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown)
+    }
+  }, [timelineFilterMenu])
 
   useEffect(() => {
     const handleDeleteShortcut = (event: KeyboardEvent) => {
@@ -1083,10 +1157,7 @@ function App() {
     () => normalizeDate(timelineStartDate),
     [timelineStartDate],
   )
-  const timelineWindowDayCount = useMemo(
-    () => Math.max(TIMELINE_MIN_WINDOW_DAYS, endOfMonth(visibleMonthStart).getDate()),
-    [visibleMonthStart],
-  )
+  const timelineWindowDayCount = TIMELINE_WINDOW_DAYS
   const visibleMonthEnd = useMemo(
     () => addCalendarDays(visibleMonthStart, timelineWindowDayCount - 1),
     [timelineWindowDayCount, visibleMonthStart],
@@ -1102,8 +1173,15 @@ function App() {
         visibleMonthStart,
         visibleMonthEnd,
         isFocusedDateInVisibleMonth ? focusedDate : null,
+        isHolidayHighlightEnabled ? CHINA_LEGAL_HOLIDAY_MAP_2026 : undefined,
       ),
-    [focusedDate, isFocusedDateInVisibleMonth, visibleMonthEnd, visibleMonthStart],
+    [
+      focusedDate,
+      isFocusedDateInVisibleMonth,
+      isHolidayHighlightEnabled,
+      visibleMonthEnd,
+      visibleMonthStart,
+    ],
   )
   const focusedDayIndex = diffCalendarDays(focusedDate, visibleMonthStart)
   const isFocusedDateVisible =
@@ -1113,7 +1191,7 @@ function App() {
   const timelineStyle = {
     '--days': timelineDays.length,
     '--day-size': 'clamp(38px, 2.9vw, 46px)',
-    '--name-col': 'clamp(132px, 10vw, 148px)',
+    '--name-col': 'clamp(78px, 7vw, 94px)',
     '--focused-left': `${isFocusedDateVisible ? (focusedDayIndex / timelineDays.length) * 100 : 0}%`,
     '--focused-width': `${100 / timelineDays.length}%`,
     '--focus-opacity': isFocusedDateVisible ? 1 : 0,
@@ -1175,6 +1253,22 @@ function App() {
     setOverviewPriorityFilter([])
     setOverviewDurationFilter([])
     setOverviewPage(1)
+  }
+  const effectiveTimelineMemberFilter = useMemo(
+    () => timelineMemberFilter.filter((memberId) => Boolean(membersById[memberId])),
+    [membersById, timelineMemberFilter],
+  )
+  const timelineMemberSummary =
+    effectiveTimelineMemberFilter.length === 0 ? '全部成员' : `成员 ${effectiveTimelineMemberFilter.length}`
+  const toggleTimelineMemberFilter = (memberId: string) => {
+    setTimelineMemberFilter((current) =>
+      current.includes(memberId)
+        ? current.filter((item) => item !== memberId)
+        : [...current, memberId],
+    )
+  }
+  const clearTimelineMemberFilter = () => {
+    setTimelineMemberFilter([])
   }
   const hasOverviewFilters =
     normalizedSearch.length > 0 ||
@@ -1245,17 +1339,9 @@ function App() {
     const startIndex = (effectiveOverviewPage - 1) * OVERVIEW_PAGE_SIZE
     return overviewTasks.slice(startIndex, startIndex + OVERVIEW_PAGE_SIZE)
   }, [effectiveOverviewPage, overviewTasks])
-  const overviewVisibleRangeStart =
-    overviewTasks.length === 0 ? 0 : (effectiveOverviewPage - 1) * OVERVIEW_PAGE_SIZE + 1
-  const overviewVisibleRangeEnd =
-    overviewTasks.length === 0
-      ? 0
-      : Math.min(effectiveOverviewPage * OVERVIEW_PAGE_SIZE, overviewTasks.length)
   const overviewSelectedTaskId = overviewVisibleTasks.some((task) => task.id === selectedTaskId)
     ? selectedTaskId
     : overviewVisibleTasks[0]?.id ?? null
-  const overviewSelectedTask =
-    overviewTasks.find((task) => task.id === overviewSelectedTaskId) ?? null
   const ganttTasks = useMemo(
     () => tasksSnapshot.filter((task) => statusFilter === '全部状态' || task.status === statusFilter),
     [statusFilter, tasksSnapshot],
@@ -1268,6 +1354,11 @@ function App() {
 
   const memberRows = useMemo(() => {
     return workspace.members
+      .filter(
+        (member) =>
+          effectiveTimelineMemberFilter.length === 0 ||
+          effectiveTimelineMemberFilter.includes(member.id),
+      )
       .map((member) => {
         const tasks = visibleMonthTasks.filter((task) => task.ownerId === member.id)
         const visibleMonthBookedHours = visibleMonthTasks
@@ -1285,7 +1376,7 @@ function App() {
           freeHours: Math.max(0, member.capacityHours - visibleMonthBookedHours),
         }
       })
-  }, [visibleMonthTasks, workspace.members])
+  }, [effectiveTimelineMemberFilter, visibleMonthTasks, workspace.members])
 
   useEffect(() => {
     timelineLaneMemberIdsRef.current = memberRows.map((row) => row.member.id)
@@ -1293,15 +1384,11 @@ function App() {
 
   const riskTasks = tasksSnapshot.filter((task) => task.status === '风险')
   const activeTasks = tasksSnapshot.filter((task) => task.status === '进行中')
-  const averageProgress = Math.round(
-    tasksSnapshot.reduce((sum, task) => sum + task.progress, 0) / Math.max(tasksSnapshot.length, 1),
-  )
-  const averageUtilization = Math.round(
-    memberRows.reduce((sum, row) => sum + row.utilization, 0) / Math.max(memberRows.length, 1),
-  )
   const visibleMonthLabel = formatTimelineHeading(visibleMonthStart, visibleMonthEnd)
   const visibleMonthRange = formatTimelineRangeLabel(visibleMonthStart, visibleMonthEnd)
-  const isCurrentMonthView = diffCalendarDays(visibleMonthStart, startOfMonth(BASE_DATE)) === 0
+  const defaultTimelineStartDate = startOfWeek(BASE_DATE)
+  const isCurrentTimelineWindow =
+    diffCalendarDays(visibleMonthStart, defaultTimelineStartDate) === 0
   const isDraggingSelection = dragSelection !== null
   const isTaskTimelineInteracting = taskTimelineInteraction !== null
   const isRecordsPage = activeNav === '记录中心'
@@ -1331,7 +1418,7 @@ function App() {
     const normalizedDate = normalizeDate(date)
     setFocusedDate(normalizedDate)
     setPendingDateValue(formatDateInputValue(normalizedDate))
-    setTimelineStartDate(startOfMonth(normalizedDate))
+    setTimelineStartDate(startOfWeek(normalizedDate))
     setIsDateJumpOpen(false)
   }
 
@@ -1354,10 +1441,10 @@ function App() {
     setIsDateJumpOpen(false)
   }
 
-  const shiftMonth = (delta: number) => {
-    const nextMonthStart = startOfMonth(addCalendarMonths(visibleMonthStart, delta))
-    setPendingDateValue(formatDateInputValue(nextMonthStart))
-    setTimelineStartDate(nextMonthStart)
+  const shiftTimelineWindow = (delta: number) => {
+    const nextWindowStart = addCalendarDays(visibleMonthStart, delta * TIMELINE_WINDOW_STEP_DAYS)
+    setPendingDateValue(formatDateInputValue(nextWindowStart))
+    setTimelineStartDate(nextWindowStart)
     setIsDateJumpOpen(false)
   }
 
@@ -1644,6 +1731,7 @@ function App() {
     event: ReactMouseEvent<HTMLElement>,
     task: Task,
     mode: TaskTimelineInteractionMode,
+    laneIndex = 0,
   ) => {
     if (event.button !== 0) {
       return
@@ -1667,10 +1755,12 @@ function App() {
       pointerStartX: event.clientX,
       laneWidth: Math.max(laneElement.getBoundingClientRect().width, 1),
       dayCount: timelineDays.length,
+      originalLaneIndex: laneIndex,
       originalOwnerId: task.ownerId,
       originalTeamId: task.teamId,
       originalStartOffset: task.startOffset,
       originalDuration: task.duration,
+      previewLaneIndex: laneIndex,
       previewOwnerId: task.ownerId,
       previewTeamId: task.teamId,
       previewStartOffset: task.startOffset,
@@ -2148,6 +2238,7 @@ function App() {
 
       let previewStartOffset = currentInteraction.originalStartOffset
       let previewDuration = currentInteraction.originalDuration
+      let previewLaneIndex = currentInteraction.previewLaneIndex
       let previewOwnerId = currentInteraction.previewOwnerId
       let previewTeamId = currentInteraction.previewTeamId
 
@@ -2164,6 +2255,16 @@ function App() {
           const rect = laneElement.getBoundingClientRect()
           if (event.clientY >= rect.top && event.clientY <= rect.bottom) {
             hoveredOwner = membersById[memberId] ?? null
+            previewLaneIndex = resolveLaneIndexFromPointer(
+              event.clientY,
+              rect.top,
+              workspace.tasks.filter(
+                (task) =>
+                  task.id !== currentInteraction.taskId &&
+                  task.ownerId === memberId &&
+                  taskOverlapsWindow(task, visibleMonthStart, visibleMonthEnd),
+              ).length,
+            )
             break
           }
         }
@@ -2187,6 +2288,7 @@ function App() {
       }
 
       if (
+        previewLaneIndex === currentInteraction.previewLaneIndex &&
         previewOwnerId === currentInteraction.previewOwnerId &&
         previewTeamId === currentInteraction.previewTeamId &&
         previewStartOffset === currentInteraction.previewStartOffset &&
@@ -2196,6 +2298,7 @@ function App() {
       }
 
       if (
+        previewLaneIndex !== currentInteraction.originalLaneIndex ||
         previewOwnerId !== currentInteraction.originalOwnerId ||
         previewStartOffset !== currentInteraction.originalStartOffset ||
         previewDuration !== currentInteraction.originalDuration
@@ -2206,6 +2309,7 @@ function App() {
       setTaskCoach(null)
       syncTaskTimelineInteraction({
         ...currentInteraction,
+        previewLaneIndex,
         previewOwnerId,
         previewTeamId,
         previewStartOffset,
@@ -2222,6 +2326,7 @@ function App() {
       }
 
       const hasChanged =
+        currentInteraction.previewLaneIndex !== currentInteraction.originalLaneIndex ||
         currentInteraction.previewOwnerId !== currentInteraction.originalOwnerId ||
         currentInteraction.previewStartOffset !== currentInteraction.originalStartOffset ||
         currentInteraction.previewDuration !== currentInteraction.originalDuration
@@ -2248,6 +2353,7 @@ function App() {
       const previousEndDate = getTaskEndDate(previousTask)
       const previousOwner = membersById[previousTask.ownerId]
       const nextOwner = membersById[currentInteraction.previewOwnerId]
+      const orderChanged = currentInteraction.previewLaneIndex !== currentInteraction.originalLaneIndex
       const ownerChanged = currentInteraction.previewOwnerId !== currentInteraction.originalOwnerId
       const scheduleChanged =
         currentInteraction.previewStartOffset !== currentInteraction.originalStartOffset ||
@@ -2259,6 +2365,8 @@ function App() {
         detail = scheduleChanged
           ? `已将项目从 ${previousOwner?.name ?? '原负责人'} 调整给 ${nextOwner?.name ?? '当前负责人'}，排期同步为 ${formatShortDateLabel(nextStartDate)} - ${formatShortDateLabel(nextEndDate)}。`
           : `已将项目从 ${previousOwner?.name ?? '原负责人'} 调整给 ${nextOwner?.name ?? '当前负责人'}，时间保持 ${formatShortDateLabel(nextStartDate)} - ${formatShortDateLabel(nextEndDate)}。`
+      } else if (currentInteraction.mode === 'move' && orderChanged && !scheduleChanged) {
+        detail = `已调整项目在 ${nextOwner?.name ?? '当前负责人'} 名下的上下顺序。`
       } else if (currentInteraction.mode === 'move') {
         detail = `已将项目整体平移到 ${formatShortDateLabel(nextStartDate)} - ${formatShortDateLabel(nextEndDate)}，原计划为 ${formatShortDateLabel(previousStartDate)} - ${formatShortDateLabel(previousEndDate)}。`
       } else if (currentInteraction.mode === 'resize-start') {
@@ -2267,21 +2375,60 @@ function App() {
         detail = `已将项目结束时间调整为 ${formatShortDateLabel(nextEndDate)}，当前总工期为 ${currentInteraction.previewDuration} 天。`
       }
 
-      setWorkspace((current) => ({
-        ...current,
-        tasks: current.tasks.map((task) =>
-          task.id === currentInteraction.taskId
-            ? {
-                ...task,
-                ownerId: currentInteraction.previewOwnerId,
-                teamId: currentInteraction.previewTeamId,
-                startOffset: currentInteraction.previewStartOffset,
-                duration: currentInteraction.previewDuration,
-                updatedAt: formatTimeLabel(),
-              }
-            : task,
-        ),
-      }))
+      setWorkspace((current) => {
+        const currentTask = current.tasks.find((task) => task.id === currentInteraction.taskId)
+        if (!currentTask) {
+          return current
+        }
+
+        const nextTask = {
+          ...currentTask,
+          ownerId: currentInteraction.previewOwnerId,
+          teamId: currentInteraction.previewTeamId,
+          startOffset: currentInteraction.previewStartOffset,
+          duration: currentInteraction.previewDuration,
+          updatedAt: formatTimeLabel(),
+        }
+
+        const remainingTasks = current.tasks.filter((task) => task.id !== currentInteraction.taskId)
+        const visibleOwnerTasks = remainingTasks.filter(
+          (task) =>
+            task.ownerId === currentInteraction.previewOwnerId &&
+            taskOverlapsWindow(task, visibleMonthStart, visibleMonthEnd),
+        )
+        const clampedLaneIndex = Math.max(
+          0,
+          Math.min(currentInteraction.previewLaneIndex, visibleOwnerTasks.length),
+        )
+
+        let insertIndex = remainingTasks.length
+
+        if (visibleOwnerTasks.length > 0 && clampedLaneIndex < visibleOwnerTasks.length) {
+          const anchorTask = visibleOwnerTasks[clampedLaneIndex]
+          const anchorIndex = remainingTasks.findIndex((task) => task.id === anchorTask.id)
+          insertIndex = anchorIndex === -1 ? remainingTasks.length : anchorIndex
+        } else {
+          const ownerTaskIndices = remainingTasks.reduce<number[]>((indices, task, index) => {
+            if (task.ownerId === currentInteraction.previewOwnerId) {
+              indices.push(index)
+            }
+            return indices
+          }, [])
+
+          if (ownerTaskIndices.length > 0) {
+            insertIndex = ownerTaskIndices[ownerTaskIndices.length - 1] + 1
+          }
+        }
+
+        return {
+          ...current,
+          tasks: [
+            ...remainingTasks.slice(0, insertIndex),
+            nextTask,
+            ...remainingTasks.slice(insertIndex),
+          ],
+        }
+      })
 
       appendOperationRecord('修改', `项目 / ${previousTask.title}`, detail)
     }
@@ -2293,7 +2440,7 @@ function App() {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [isTaskTimelineInteracting, membersById, workspace.tasks])
+  }, [isTaskTimelineInteracting, membersById, visibleMonthEnd, visibleMonthStart, workspace.tasks])
 
   const handleSaveEdit = () => {
     if (!editModal) {
@@ -2570,27 +2717,27 @@ function App() {
         ) : (
           <>
             {isOverviewPage ? (
-              <>
-                <header className="topbar">
+              <section className="overview-page">
+                <header className="topbar overview-topbar">
                   <div className="topbar-main">
                     <p className="caps">总览看板</p>
                     <h2>团队资源与项目总览</h2>
                   </div>
 
                   <div className="topbar-actions">
-                    <button className="ghost-button" onClick={openResourceModal}>
+                    <button className="ghost-button topbar-action-button" onClick={openResourceModal}>
                       组织管理
                     </button>
-                    <button className="ghost-button" onClick={handleCreateTask}>
+                    <button className="ghost-button topbar-action-button" onClick={handleCreateTask}>
                       新增项目
                     </button>
-                    <button className="ghost-button" onClick={exportWorkspace}>
+                    <button className="ghost-button topbar-action-button" onClick={exportWorkspace}>
                       导出 JSON
                     </button>
                   </div>
                 </header>
 
-                <section className="summary-grid">
+                <section className="summary-grid overview-summary-grid">
                   <article className="summary-card compact-card">
                     <div className="summary-row">
                       <p>总项目数</p>
@@ -2615,35 +2762,9 @@ function App() {
                     <strong>{riskTasks.length}</strong>
                     <span>需优先处理</span>
                   </article>
-                  <article className="summary-card compact-card highlight-card">
-                    <div className="summary-row">
-                      <p>平均进度 / 负载</p>
-                      <span className="summary-tag purple-tag">双指标</span>
-                    </div>
-                    <div className="dual-stats">
-                      <div className="dual-stat-card">
-                        <div className="dual-stat-head">
-                          <strong>{averageProgress}%</strong>
-                          <span>项目进度</span>
-                        </div>
-                        <div className="mini-progress-bar">
-                          <span style={{ width: `${averageProgress}%` }}></span>
-                        </div>
-                      </div>
-                      <div className="dual-stat-card">
-                        <div className="dual-stat-head">
-                          <strong>{averageUtilization}%</strong>
-                          <span>资源占用</span>
-                        </div>
-                        <div className="mini-progress-bar load-bar">
-                          <span style={{ width: `${averageUtilization}%` }}></span>
-                        </div>
-                      </div>
-                    </div>
-                  </article>
                 </section>
 
-                <section className="content-grid">
+                <section className="content-grid overview-content-grid">
                   <div className="gantt-card overview-card">
                     <div className="card-header overview-card-header">
                       <div>
@@ -2828,19 +2949,13 @@ function App() {
                     </div>
 
                     <div className="project-table overview-table">
-                      <div className="overview-meta-bar">
-                        <span>
-                          显示 {overviewVisibleRangeStart}-{overviewVisibleRangeEnd} / {overviewTasks.length} 项
-                        </span>
-                        <span>按最近更新时间倒序</span>
-                      </div>
                       <div className="table-head">
-                        <span>项目</span>
-                        <span>负责人</span>
-                        <span>状态</span>
-                        <span>优先级</span>
-                        <span>项目执行周期</span>
-                        <span>里程碑</span>
+                        <span className="table-head-project">项目</span>
+                        <span className="table-head-owner">负责人</span>
+                        <span className="table-head-status">状态</span>
+                        <span className="table-head-priority">优先级</span>
+                        <span className="table-head-period">项目执行周期</span>
+                        <span className="table-head-milestone">里程碑</span>
                       </div>
                       {overviewTasks.length === 0 ? (
                         <div className="table-empty">没有找到符合筛选条件的项目。</div>
@@ -2849,7 +2964,7 @@ function App() {
                           const priorityMeta = priorityPalette[task.priority]
                           const ownerName = membersById[task.ownerId]?.name ?? '-'
                           const executionRange = formatTaskExecutionRange(task)
-                          const executionDuration = `${Math.max(task.duration, 1)} 天`
+                          const executionDuration = `持续 ${Math.max(task.duration, 1)} 天`
                           return (
                             <button
                               key={task.id}
@@ -2861,16 +2976,16 @@ function App() {
                                 <span className="truncate-text">{task.title}</span>
                               </span>
                               <span
-                                className="table-cell table-cell-center"
+                                className="table-cell table-cell-start"
                                 title={ownerName}
                                 data-tooltip={ownerName}
                               >
                                 <span className="truncate-text">{ownerName}</span>
                               </span>
-                              <span className="table-cell table-cell-center">
+                              <span className="table-cell table-cell-start">
                                 <span>{task.status}</span>
                               </span>
-                              <span className="table-cell table-cell-center">
+                              <span className="table-cell table-cell-start">
                                 <em
                                   className="priority-pill"
                                   style={{
@@ -2883,7 +2998,7 @@ function App() {
                                 </em>
                               </span>
                               <span
-                                className="table-cell table-cell-center"
+                                className="table-cell table-cell-start"
                                 title={`${executionRange} · ${executionDuration}`}
                                 data-tooltip={`${executionRange} · ${executionDuration}`}
                               >
@@ -2893,7 +3008,7 @@ function App() {
                                 </span>
                               </span>
                               <span
-                                className="table-cell"
+                                className="table-cell table-cell-end"
                                 title={task.milestone}
                                 data-tooltip={task.milestone}
                               >
@@ -2934,118 +3049,115 @@ function App() {
                       ) : null}
                     </div>
                   </div>
-
-                  <div className="side-column">
-                    <article className="detail-card">
-                      <div className="card-header">
-                        <div>
-                          <p className="caps">项目摘要</p>
-                          <h3>{overviewSelectedTask?.title ?? '未选择项目'}</h3>
-                        </div>
-                        {overviewSelectedTask ? (
-                          <span className={`status-chip status-${overviewSelectedTask.status}`}>
-                            {overviewSelectedTask.status}
-                          </span>
-                        ) : null}
-                      </div>
-
-                      {overviewSelectedTask ? (
-                        <>
-                          <div className="metric-grid">
-                            <div>
-                              <span>所属团队</span>
-                              <strong>{teamsById[overviewSelectedTask.teamId]?.name}</strong>
-                            </div>
-                            <div>
-                              <span>负责人</span>
-                              <strong>{membersById[overviewSelectedTask.ownerId]?.name}</strong>
-                            </div>
-                            <div>
-                              <span>优先级</span>
-                              <strong>{overviewSelectedTask.priority}</strong>
-                            </div>
-                            <div>
-                              <span>最近更新</span>
-                              <strong>{overviewSelectedTask.updatedAt}</strong>
-                            </div>
-                          </div>
-                          <p className="detail-copy">{overviewSelectedTask.summary}</p>
-                          <div className="progress-track">
-                            <span
-                              style={{
-                                width: `${overviewSelectedTask.progress}%`,
-                                background: priorityPalette[overviewSelectedTask.priority].solid,
-                              }}
-                            ></span>
-                          </div>
-                          <div className="summary-actions">
-                            <button
-                              className="ghost-button"
-                              onClick={() => openEditModal(overviewSelectedTask.id)}
-                            >
-                              编辑项目
-                            </button>
-                            <button
-                              className="danger-button"
-                              onClick={() => openDeleteConfirm(overviewSelectedTask.id)}
-                            >
-                              删除项目
-                            </button>
-                            <button
-                              className="activity-launcher"
-                              onClick={() => openRecordsCenter('操作记录')}
-                            >
-                              <span className="activity-launcher-copy">
-                                <strong>进入记录中心</strong>
-                                <small>查看更新记录与操作记录</small>
-                              </span>
-                              <span className="activity-launcher-count">
-                                {workspace.updateRecords.length + workspace.operationRecords.length}
-                              </span>
-                            </button>
-                          </div>
-                        </>
-                      ) : (
-                        <p className="detail-copy">请选择一个项目查看摘要。</p>
-                      )}
-                    </article>
-                  </div>
                 </section>
-              </>
+              </section>
             ) : (
               <section className="resource-focus-layout">
                 <div className="gantt-card gantt-card-focus" ref={timelineGestureRegionRef}>
                   <div className="card-header">
                     <div>
-                      <p className="caps">资源排期</p>
-                      <h3>{visibleMonthLabel} 甘特图排期</h3>
-                      <p className="timeline-copy">
-                        资源排期页只保留时间线和排期交互；请在日期栏或时间线区域左右滑动，时间会按天平滑推进，点击上下月可快速跳到整月。
-                      </p>
+                      <h3>{visibleMonthLabel} 项目排期</h3>
                     </div>
                   </div>
 
                   <div className="timeline-toolbar">
-                    <div className="filter-pills">
-                      {(['全部状态', '计划中', '进行中', '风险', '已完成'] as const).map((status) => (
-                        <button
-                          key={status}
-                          className={statusFilter === status ? 'pill is-active' : 'pill'}
-                          onClick={() => setStatusFilter(status)}
-                        >
-                          {status}
-                        </button>
-                      ))}
+                    <div className="timeline-toolbar-start">
+                      <div className="filter-pills">
+                        {(['全部状态', '计划中', '进行中', '风险', '已完成'] as const).map((status) => (
+                          <button
+                            key={status}
+                            className={statusFilter === status ? 'pill is-active' : 'pill'}
+                            onClick={() => setStatusFilter(status)}
+                          >
+                            {status}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="timeline-filter-tools" ref={timelineFilterBarRef}>
+                        <div className="overview-filter-group">
+                          <button
+                            type="button"
+                            className={`overview-filter-trigger timeline-filter-trigger ${timelineFilterMenu === 'member' ? 'is-open' : ''} ${effectiveTimelineMemberFilter.length > 0 ? 'is-active' : ''}`}
+                            onClick={() =>
+                              setTimelineFilterMenu((current) => (current === 'member' ? null : 'member'))
+                            }
+                          >
+                            <span>{timelineMemberSummary}</span>
+                            <strong>{timelineFilterMenu === 'member' ? '收起' : '筛选'}</strong>
+                          </button>
+                          {timelineFilterMenu === 'member' ? (
+                            <div className="overview-filter-popover timeline-filter-popover">
+                              <div className="overview-filter-popover-head">
+                                <span>成员多选</span>
+                                <button type="button" onClick={clearTimelineMemberFilter}>
+                                  清空
+                                </button>
+                              </div>
+                              <div className="overview-filter-option-list">
+                                {workspace.members.map((member) => (
+                                  <label key={member.id} className="overview-filter-option">
+                                    <input
+                                      checked={effectiveTimelineMemberFilter.includes(member.id)}
+                                      onChange={() => toggleTimelineMemberFilter(member.id)}
+                                      type="checkbox"
+                                    />
+                                    <span>
+                                      {member.name} · {member.role}
+                                    </span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+
+                        <div className="overview-filter-group">
+                          <button
+                            type="button"
+                            className={`overview-filter-trigger timeline-filter-trigger ${timelineFilterMenu === 'holiday' ? 'is-open' : ''} ${isHolidayHighlightEnabled ? 'is-active' : ''}`}
+                            onClick={() =>
+                              setTimelineFilterMenu((current) => (current === 'holiday' ? null : 'holiday'))
+                            }
+                          >
+                            <span>中国法定节假日</span>
+                            <strong>{isHolidayHighlightEnabled ? '已标记' : '查看'}</strong>
+                          </button>
+                          {timelineFilterMenu === 'holiday' ? (
+                            <div className="overview-filter-popover timeline-filter-popover timeline-holiday-popover">
+                              <div className="overview-filter-popover-head">
+                                <span>2026 年法定节假日</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsHolidayHighlightEnabled((current) => !current)}
+                                >
+                                  {isHolidayHighlightEnabled ? '取消标记' : '标记日期'}
+                                </button>
+                              </div>
+                              <div className="timeline-holiday-list">
+                                {CHINA_LEGAL_HOLIDAY_PERIODS_2026.map((holiday) => (
+                                  <div key={holiday.id} className="timeline-holiday-item">
+                                    <strong>{holiday.name}</strong>
+                                    <span>
+                                      {holiday.start.replaceAll('-', '.')} - {holiday.end.replaceAll('-', '.')}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
 
                     <div className="month-navigator">
-                      {!isCurrentMonthView ? (
+                      {!isCurrentTimelineWindow ? (
                         <button className="icon-button" onClick={() => jumpToDate(BASE_DATE)}>
-                          回到本月
+                          回到当前时间
                         </button>
                       ) : null}
-                      <button className="ghost-button" onClick={() => shiftMonth(-1)}>
-                        上月
+                      <button className="ghost-button" onClick={() => shiftTimelineWindow(-1)}>
+                        上周
                       </button>
                       <div className="month-navigator-anchor" ref={dateJumpRef}>
                         <button
@@ -3109,25 +3221,25 @@ function App() {
                               <button
                                 type="button"
                                 className="pill"
-                                onClick={() => jumpToDate(startOfMonth(visibleMonthStart))}
+                                onClick={() => jumpToDate(startOfWeek(pendingJumpDate))}
                               >
-                                月初
+                                本周
                               </button>
                               <button
                                 type="button"
                                 className="pill"
                                 onClick={() =>
-                                  jumpToDate(addCalendarMonthsKeepingDay(pendingJumpDate, 1))
+                                  jumpToDate(addCalendarDays(pendingJumpDate, TIMELINE_WINDOW_STEP_DAYS))
                                 }
                               >
-                                下个月
+                                下周
                               </button>
                             </div>
                           </div>
                         ) : null}
                       </div>
-                      <button className="ghost-button" onClick={() => shiftMonth(1)}>
-                        下月
+                      <button className="ghost-button" onClick={() => shiftTimelineWindow(1)}>
+                        下周
                       </button>
                     </div>
                   </div>
@@ -3141,9 +3253,11 @@ function App() {
                             <span
                               key={day.key}
                               data-day-key={day.key}
+                              title={day.holidayLabel ?? undefined}
                               className={[
                                 'date-cell',
                                 day.isFocused ? 'is-focused' : '',
+                                day.isHoliday ? 'is-holiday' : '',
                                 day.isWeekend ? 'is-weekend' : '',
                                 day.isToday ? 'is-today' : '',
                                 day.isOutsideVisibleMonth ? 'is-outside-month' : '',
@@ -3154,13 +3268,46 @@ function App() {
                             >
                               <strong>{day.dayLabel}</strong>
                               <small>{day.weekdayLabel}</small>
+                              {day.isHoliday ? <em className="date-holiday-tag">休</em> : null}
                             </span>
                           ))}
                         </div>
                       </div>
 
                       <div className="timeline-body">
-                        {memberRows.map((row) => {
+                        {memberRows.length === 0 ? (
+                          <div className="timeline-empty">当前筛选下没有可展示的成员，请重新选择成员范围。</div>
+                        ) : (
+                          memberRows.map((row, rowIndex) => {
+                          const rowTasks =
+                            taskTimelineInteraction?.mode === 'move'
+                              ? (() => {
+                                  const movingTask =
+                                    row.tasks.find((task) => task.id === taskTimelineInteraction.taskId) ??
+                                    null
+                                  const remainingTasks = row.tasks.filter(
+                                    (task) => task.id !== taskTimelineInteraction.taskId,
+                                  )
+
+                                  if (row.member.id !== taskTimelineInteraction.previewOwnerId) {
+                                    return remainingTasks
+                                  }
+
+                                  if (!movingTask) {
+                                    return remainingTasks
+                                  }
+
+                                  const insertIndex = Math.max(
+                                    0,
+                                    Math.min(taskTimelineInteraction.previewLaneIndex, remainingTasks.length),
+                                  )
+                                  return [
+                                    ...remainingTasks.slice(0, insertIndex),
+                                    movingTask,
+                                    ...remainingTasks.slice(insertIndex),
+                                  ]
+                                })()
+                              : row.tasks
                           const hasDragPreview = dragSelection?.memberId === row.member.id
                           const isTaskDropTarget =
                             taskTimelineInteraction?.mode === 'move' &&
@@ -3181,19 +3328,15 @@ function App() {
                             ? addCalendarDays(visibleMonthStart, previewEndDay)
                             : visibleMonthStart
                           const previewLabel = `${previewStartDate.getMonth() + 1}/${previewStartDate.getDate()} - ${previewEndDate.getMonth() + 1}/${previewEndDate.getDate()}`
-                          const rowLaneCount = row.tasks.length + (hasDragPreview ? 1 : 0)
+                          const rowLaneCount = rowTasks.length + (hasDragPreview ? 1 : 0)
 
                           return (
-                            <div key={row.member.id} className="person-row">
+                            <div
+                              key={row.member.id}
+                              className={`person-row row-tone-${(rowIndex % 4) + 1}`}
+                            >
                               <div className="person-meta">
-                                <div className="avatar">{row.member.avatar}</div>
-                                <div>
-                                  <strong>{row.member.name}</strong>
-                                  <p>
-                                    {row.member.role} · 剩余 {row.freeHours} 小时
-                                  </p>
-                                </div>
-                                <span className="workload-tag">占用 {row.utilization}%</span>
+                                <strong>{row.member.name}</strong>
                               </div>
 
                               <div
@@ -3218,14 +3361,14 @@ function App() {
                                     style={{
                                       left: previewLeft,
                                       width: previewWidth,
-                                      top: `${row.tasks.length * 40 + 10}px`,
+                                      top: `${rowTasks.length * 40 + 10}px`,
                                     }}
                                   >
                                     <span>{previewLabel}</span>
                                   </div>
                                 ) : null}
 
-                                {row.tasks.map((task, index) => {
+                                {rowTasks.map((task, index) => {
                                   const taskStartDate = getTaskStartDate(task)
                                   const taskEndDate = getTaskEndDate(task)
                                   const clippedStart =
@@ -3265,20 +3408,13 @@ function App() {
                                       }}
                                       onClick={() => handleSelectTask(task.id, { fromTimeline: true })}
                                       onMouseDown={(event) =>
-                                        startTaskTimelineInteraction(event, task, 'move')
+                                        startTaskTimelineInteraction(event, task, 'move', index)
                                       }
                                       onContextMenu={(event) => openContextMenu(event, task.id)}
                                       aria-label={`${task.title}，负责人 ${owner?.name ?? '未分配'}，优先级 ${task.priority}，进度 ${task.progress}%`}
                                     >
                                       <span className="task-title">{task.title}</span>
-                                      <em
-                                        className="priority-pill task-priority-pill"
-                                        style={{
-                                          background: priorityMeta.background,
-                                          borderColor: priorityMeta.border,
-                                          color: priorityMeta.text,
-                                        }}
-                                      >
+                                      <em className="priority-pill task-priority-pill">
                                         {task.priority}
                                       </em>
                                       <small className="task-progress-pill">{task.progress}%</small>
@@ -3303,7 +3439,8 @@ function App() {
                               </div>
                             </div>
                           )
-                        })}
+                        })
+                        )}
                       </div>
                     </div>
                   </div>
@@ -3341,8 +3478,13 @@ function App() {
             </div>
 
             <p className="detail-copy resource-copy">
-              团队是资源分组单元，成员是具体执行人。删除操作会先校验是否仍有关联成员或项目，避免误删造成排期失真。
+              统一维护团队分组和成员档案，删除前会自动校验关联关系，避免误删影响排期。
             </p>
+
+            <div className="resource-summary-strip">
+              <span className="resource-summary-chip">团队 {workspace.teams.length}</span>
+              <span className="resource-summary-chip">成员 {workspace.members.length}</span>
+            </div>
 
             {resourceNotice ? (
               <div
@@ -3361,9 +3503,13 @@ function App() {
                 <div className="resource-section-head">
                   <div>
                     <p className="caps">团队管理</p>
-                    <h4>新增、编辑与删除团队</h4>
+                    <div className="resource-section-title-row">
+                      <h4>团队列表</h4>
+                      <span className="resource-count-badge">{workspace.teams.length} 个团队</span>
+                    </div>
+                    <p className="resource-section-copy">管理团队名称、负责人和主题色，保证排期归属清晰。</p>
                   </div>
-                  <button className="ghost-button" onClick={openTeamCreate}>
+                  <button className="ghost-button resource-add-button" onClick={openTeamCreate}>
                     新增团队
                   </button>
                 </div>
@@ -3371,9 +3517,12 @@ function App() {
                 {teamEditor ? (
                   <div className="resource-form-card">
                     <div className="resource-form-head">
-                      <strong>{teamEditor.mode === 'create' ? '新建团队' : '编辑团队'}</strong>
-                      <button className="icon-button" onClick={() => setTeamEditor(null)}>
-                        取消
+                      <div className="resource-form-title">
+                        <strong>{teamEditor.mode === 'create' ? '新建团队' : '编辑团队'}</strong>
+                        <span>补全团队基础信息后保存到组织列表。</span>
+                      </div>
+                      <button className="icon-button resource-form-dismiss" onClick={() => setTeamEditor(null)}>
+                        收起
                       </button>
                     </div>
 
@@ -3381,6 +3530,7 @@ function App() {
                       <label>
                         团队名称
                         <input
+                          placeholder="例如：体验设计组"
                           value={teamEditor.draft.name}
                           onChange={(event) =>
                             setTeamEditor((current) =>
@@ -3398,6 +3548,7 @@ function App() {
                       <label>
                         团队负责人
                         <input
+                          placeholder="填写负责人姓名"
                           value={teamEditor.draft.lead}
                           onChange={(event) =>
                             setTeamEditor((current) =>
@@ -3453,10 +3604,15 @@ function App() {
                           ></span>
                           <div>
                             <strong>{team.name}</strong>
-                            <p>
-                              负责人 {team.lead} · {teamStats[team.id]?.memberCount ?? 0} 名成员 ·{' '}
-                              {teamStats[team.id]?.taskCount ?? 0} 个项目
-                            </p>
+                            <p className="resource-row-subtitle">负责人 {team.lead}</p>
+                            <div className="resource-meta-list">
+                              <span className="resource-meta-pill">
+                                {teamStats[team.id]?.memberCount ?? 0} 名成员
+                              </span>
+                              <span className="resource-meta-pill">
+                                {teamStats[team.id]?.taskCount ?? 0} 个项目
+                              </span>
+                            </div>
                           </div>
                         </div>
                         <div className="resource-row-actions">
@@ -3480,9 +3636,13 @@ function App() {
                 <div className="resource-section-head">
                   <div>
                     <p className="caps">成员管理</p>
-                    <h4>维护成员档案与归属团队</h4>
+                    <div className="resource-section-title-row">
+                      <h4>成员列表</h4>
+                      <span className="resource-count-badge">{workspace.members.length} 名成员</span>
+                    </div>
+                    <p className="resource-section-copy">维护角色、归属团队和产能，保证资源分配真实可用。</p>
                   </div>
-                  <button className="ghost-button" onClick={openMemberCreate}>
+                  <button className="ghost-button resource-add-button" onClick={openMemberCreate}>
                     新增成员
                   </button>
                 </div>
@@ -3490,9 +3650,12 @@ function App() {
                 {memberEditor ? (
                   <div className="resource-form-card">
                     <div className="resource-form-head">
-                      <strong>{memberEditor.mode === 'create' ? '新建成员' : '编辑成员'}</strong>
-                      <button className="icon-button" onClick={() => setMemberEditor(null)}>
-                        取消
+                      <div className="resource-form-title">
+                        <strong>{memberEditor.mode === 'create' ? '新建成员' : '编辑成员'}</strong>
+                        <span>维护成员角色、团队归属和可用产能。</span>
+                      </div>
+                      <button className="icon-button resource-form-dismiss" onClick={() => setMemberEditor(null)}>
+                        收起
                       </button>
                     </div>
 
@@ -3500,6 +3663,7 @@ function App() {
                       <label>
                         成员姓名
                         <input
+                          placeholder="例如：周亦"
                           value={memberEditor.draft.name}
                           onChange={(event) =>
                             setMemberEditor((current) =>
@@ -3517,6 +3681,7 @@ function App() {
                       <label>
                         成员角色
                         <input
+                          placeholder="例如：产品经理"
                           value={memberEditor.draft.role}
                           onChange={(event) =>
                             setMemberEditor((current) =>
@@ -3558,6 +3723,7 @@ function App() {
                         头像文字
                         <input
                           maxLength={2}
+                          placeholder="2字以内"
                           value={memberEditor.draft.avatar}
                           onChange={(event) =>
                             setMemberEditor((current) =>
@@ -3613,10 +3779,16 @@ function App() {
                           <span className="resource-avatar">{member.avatar}</span>
                           <div>
                             <strong>{member.name}</strong>
-                            <p>
-                              {member.role} · {teamsById[member.teamId]?.name ?? '未分配团队'} · 周容量{' '}
-                              {member.capacityHours} 小时 · 负责 {memberTaskCounts[member.id] ?? 0} 个项目
-                            </p>
+                            <p className="resource-row-subtitle">{member.role}</p>
+                            <div className="resource-meta-list">
+                              <span className="resource-meta-pill">
+                                {teamsById[member.teamId]?.name ?? '未分配团队'}
+                              </span>
+                              <span className="resource-meta-pill">周容量 {member.capacityHours} 小时</span>
+                              <span className="resource-meta-pill">
+                                负责 {memberTaskCounts[member.id] ?? 0} 个项目
+                              </span>
+                            </div>
                           </div>
                         </div>
                         <div className="resource-row-actions">
