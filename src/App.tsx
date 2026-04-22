@@ -186,6 +186,13 @@ type TaskCoachState = {
   message: string
 } | null
 
+type MemberRowReorderState = {
+  memberId: string
+  previewIndex: number
+  startY: number
+  currentY: number
+} | null
+
 type TimelineBrowseState = {
   lastX: number
   stepWidth: number
@@ -225,8 +232,6 @@ type NavSection =
   | '总览'
   | '组织管理'
   | '资源排期'
-  | '项目进度'
-  | '团队协作'
   | '记录中心'
   | '账号管理'
 type RecordView = '更新记录' | '操作记录'
@@ -239,6 +244,7 @@ const BASE_DATE = new Date('2026-04-21T00:00:00+08:00')
 const TIMELINE_WINDOW_DAYS = 14
 const TIMELINE_WINDOW_STEP_DAYS = 7
 const OVERVIEW_PAGE_SIZE = 10
+const RECORD_PAGE_SIZE = 10
 const priorityOrder: Priority[] = ['P0', 'P1', 'P2', 'P3', 'P4', 'P5']
 const CURRENT_OPERATOR = '当前用户'
 
@@ -262,6 +268,84 @@ const CHINA_OFFICIAL_HOLIDAY_CALENDAR_MAP_2026 = buildHolidayCalendarMap(
 )
 
 const SEEDED_UPDATE_RECORDS: ReleaseRecord[] = [
+  {
+    id: 'release-12',
+    version: 'v1.6.3',
+    updatedAt: '2026/04/22 21:50',
+    features: [
+      '总览页项目表头与数据列重新统一列宽和内边距，负责人、状态、优先级、周期、里程碑对齐更稳定。',
+      '项目清单增加更清晰的行区分样式，列表浏览时更容易锁定当前行，减少看错行的情况。',
+    ],
+  },
+  {
+    id: 'release-11',
+    version: 'v1.6.2',
+    updatedAt: '2026/04/22 21:36',
+    features: [
+      '左侧导航顺序微调，将组织管理入口下移一位，浏览路径更贴近先排期后管理的使用节奏。',
+      '记录中心继续补齐最新页面调整，确保本地版本历史与当前界面保持一致。',
+    ],
+  },
+  {
+    id: 'release-10',
+    version: 'v1.6.1',
+    updatedAt: '2026/04/22 21:28',
+    features: [
+      '组织管理页移除成员周容量字段，成员清单、成员详情与成员编辑表单统一精简。',
+      '成员编辑仅保留姓名、角色、所属团队和头像文字四个核心信息，减少无效维护项。',
+      '成员信息卡片与详情指标重新收敛，只保留当前管理动作真正需要的内容。',
+    ],
+  },
+  {
+    id: 'release-9',
+    version: 'v1.6.0',
+    updatedAt: '2026/04/22 21:05',
+    features: [
+      '资源排期改为固定工作台布局，顶部筛选与日期头常驻，纵向浏览时不再带着整页一起滚动。',
+      '成员行支持从左侧姓名区域直接左键拖拽调整上下顺序，排期视图与成员管理顺序同步。',
+      '资源排期纵向滚动条改为隐藏式滚动，保留触控板与鼠标滚动体验，页面右侧不再出现明显长滚动条。',
+    ],
+  },
+  {
+    id: 'release-8',
+    version: 'v1.5.0',
+    updatedAt: '2026/04/22 20:10',
+    features: [
+      '总览页改为固定工作台布局，压缩顶部统计、筛选与表格行高，页面整体不再上下滚动。',
+      '组织管理页与总览页统一改为局部滚动结构，团队列表与关联项目支持在各自区域内独立滚动。',
+      '左侧导航精简为总览、组织管理、资源排期与记录中心四个主入口，并补齐记录中心版本更新记录。',
+    ],
+  },
+  {
+    id: 'release-7',
+    version: 'v1.4.0',
+    updatedAt: '2026/04/22 18:20',
+    features: [
+      '组织管理从弹窗迁移为独立页面，统一为团队视图与成员视图双工作台。',
+      '团队与成员管理改为左侧目录加右侧详情编辑的主从结构，并补充搜索、筛选计数与安全删除校验。',
+      '组织管理页头部信息、统计卡片与操作区重新梳理，新增成员入口移动到团队详情操作区。',
+    ],
+  },
+  {
+    id: 'release-6',
+    version: 'v1.3.0',
+    updatedAt: '2026/04/22 11:40',
+    features: [
+      '法定节假日默认标记，并补充调休工作日展示，支持在排期中直接识别休假与补班日期。',
+      '总览列表支持批量选择与批量删除，记录中心可追踪对应的增删改与导出动作。',
+      '项目清单补齐项目执行周期列，并继续优化优先级标签、行内信息密度和负责人识别效率。',
+    ],
+  },
+  {
+    id: 'release-5',
+    version: 'v1.2.0',
+    updatedAt: '2026/04/21 22:10',
+    features: [
+      '项目条支持停留提示、整体拖动、首尾拉伸与上下移动负责人，排期调整更接近真实甘特交互。',
+      '资源排期支持按天丝滑横向浏览，优化触控板与鼠标横向滑动并降低浏览器误回退。',
+      '日期展示补充月份信息，今天日期加入淡色高亮，并把默认时间窗口收敛到更适合日常查看的短周期视图。',
+    ],
+  },
   {
     id: 'release-4',
     version: 'v1.1.0',
@@ -937,6 +1021,26 @@ function resolveLaneIndexFromPointer(clientY: number, rectTop: number, taskCount
   return Math.max(0, Math.min(taskCount, rawIndex))
 }
 
+function reorderVisibleMembers(allMembers: Member[], nextVisibleMemberIds: string[]) {
+  const visibleMemberIds = new Set(nextVisibleMemberIds)
+  const visibleMembersById = new Map(
+    allMembers
+      .filter((member) => visibleMemberIds.has(member.id))
+      .map((member) => [member.id, member] as const),
+  )
+  let nextVisibleIndex = 0
+
+  return allMembers.map((member) => {
+    if (!visibleMemberIds.has(member.id)) {
+      return member
+    }
+
+    const nextMemberId = nextVisibleMemberIds[nextVisibleIndex]
+    nextVisibleIndex += 1
+    return visibleMembersById.get(nextMemberId) ?? member
+  })
+}
+
 function createClientId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
 }
@@ -994,6 +1098,7 @@ function App() {
   })
   const [activeNav, setActiveNav] = useState<NavSection>('资源排期')
   const [recordView, setRecordView] = useState<RecordView>('更新记录')
+  const [recordPage, setRecordPage] = useState(1)
   const [selectedTaskId, setSelectedTaskId] = useState(() => defaultWorkspace.tasks[0].id)
   const [overviewPage, setOverviewPage] = useState(1)
   const [teamFilter, setTeamFilter] = useState('全部团队')
@@ -1031,17 +1136,21 @@ function App() {
   const [dragSelection, setDragSelection] = useState<DragSelectionState>(null)
   const [taskTimelineInteraction, setTaskTimelineInteraction] =
     useState<TaskTimelineInteractionState>(null)
+  const [memberRowReorder, setMemberRowReorder] = useState<MemberRowReorderState>(null)
   const [pendingTaskCoachId, setPendingTaskCoachId] = useState<string | null>(null)
   const [taskCoach, setTaskCoach] = useState<TaskCoachState>(null)
   const deferredSearch = useDeferredValue(searchValue)
   const dragSelectionRef = useRef<DragSelectionState>(null)
   const taskTimelineInteractionRef = useRef<TaskTimelineInteractionState>(null)
+  const memberRowReorderRef = useRef<MemberRowReorderState>(null)
   const dateJumpRef = useRef<HTMLDivElement | null>(null)
   const overviewFilterBarRef = useRef<HTMLDivElement | null>(null)
   const timelineFilterBarRef = useRef<HTMLDivElement | null>(null)
   const timelineGestureRegionRef = useRef<HTMLDivElement | null>(null)
   const timelineLaneRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const timelineRowRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const timelineLaneMemberIdsRef = useRef<string[]>([])
+  const timelineVisibleMemberIdsRef = useRef<string[]>([])
   const ignoreTaskClickRef = useRef(false)
   const hasUsedTimelineGestureRef = useRef(false)
   const timelineBrowseRef = useRef<TimelineBrowseState>(null)
@@ -1069,6 +1178,8 @@ function App() {
         setDragSelection(null)
         taskTimelineInteractionRef.current = null
         setTaskTimelineInteraction(null)
+        memberRowReorderRef.current = null
+        setMemberRowReorder(null)
         setPendingTaskCoachId(null)
         setTaskCoach(null)
       }
@@ -1433,6 +1544,20 @@ function App() {
     const startIndex = (effectiveOverviewPage - 1) * OVERVIEW_PAGE_SIZE
     return overviewTasks.slice(startIndex, startIndex + OVERVIEW_PAGE_SIZE)
   }, [effectiveOverviewPage, overviewTasks])
+  const recordTotalCount =
+    recordView === '更新记录'
+      ? workspace.updateRecords.length
+      : workspace.operationRecords.length
+  const recordTotalPages = Math.max(1, Math.ceil(recordTotalCount / RECORD_PAGE_SIZE))
+  const effectiveRecordPage = Math.min(recordPage, recordTotalPages)
+  const visibleUpdateRecords = useMemo(() => {
+    const startIndex = (effectiveRecordPage - 1) * RECORD_PAGE_SIZE
+    return workspace.updateRecords.slice(startIndex, startIndex + RECORD_PAGE_SIZE)
+  }, [effectiveRecordPage, workspace.updateRecords])
+  const visibleOperationRecords = useMemo(() => {
+    const startIndex = (effectiveRecordPage - 1) * RECORD_PAGE_SIZE
+    return workspace.operationRecords.slice(startIndex, startIndex + RECORD_PAGE_SIZE)
+  }, [effectiveRecordPage, workspace.operationRecords])
   const overviewTaskIds = useMemo(() => overviewTasks.map((task) => task.id), [overviewTasks])
   const overviewVisibleTaskIds = useMemo(
     () => overviewVisibleTasks.map((task) => task.id),
@@ -1530,6 +1655,7 @@ function App() {
 
   useEffect(() => {
     timelineLaneMemberIdsRef.current = memberRows.map((row) => row.member.id)
+    timelineVisibleMemberIdsRef.current = memberRows.map((row) => row.member.id)
   }, [memberRows])
 
   const riskTasks = tasksSnapshot.filter((task) => task.status === '风险')
@@ -1541,10 +1667,12 @@ function App() {
     diffCalendarDays(visibleMonthStart, defaultTimelineStartDate) === 0
   const isDraggingSelection = dragSelection !== null
   const isTaskTimelineInteracting = taskTimelineInteraction !== null
+  const isMemberRowReordering = memberRowReorder !== null
   const isRecordsPage = activeNav === '记录中心'
   const isResourceManagementPage = activeNav === '组织管理'
+  const isResourceTimelinePage = activeNav === '资源排期'
   const isOverviewPage =
-    !isRecordsPage && activeNav !== '资源排期' && !isResourceManagementPage
+    !isRecordsPage && !isResourceTimelinePage && !isResourceManagementPage
   const activeResourceTeam = teamsById[selectedResourceTeamId] ?? workspace.teams[0] ?? null
   const activeResourceMember = membersById[selectedResourceMemberId] ?? workspace.members[0] ?? null
   const activeResourceTeamMembers = useMemo(
@@ -1623,6 +1751,15 @@ function App() {
   )
   const pendingJumpMonthLabel = formatMonthHeading(pendingJumpDate)
   const pendingJumpMonthRange = formatMonthRangeLabel(pendingJumpDate)
+  const isFixedWorkspacePage =
+    isRecordsPage || isResourceManagementPage || isOverviewPage || isResourceTimelinePage
+  const mainPanelClassName = isRecordsPage
+    ? 'main-panel main-panel-fixed main-panel-records'
+    : isResourceTimelinePage
+      ? 'main-panel main-panel-fixed main-panel-resource'
+    : isResourceManagementPage || isOverviewPage
+      ? 'main-panel main-panel-fixed'
+      : 'main-panel'
 
   const syncDragSelection = (nextSelection: DragSelectionState) => {
     dragSelectionRef.current = nextSelection
@@ -1632,6 +1769,11 @@ function App() {
   const syncTaskTimelineInteraction = (nextInteraction: TaskTimelineInteractionState) => {
     taskTimelineInteractionRef.current = nextInteraction
     setTaskTimelineInteraction(nextInteraction)
+  }
+
+  const syncMemberRowReorder = (nextReorder: MemberRowReorderState) => {
+    memberRowReorderRef.current = nextReorder
+    setMemberRowReorder(nextReorder)
   }
 
   const jumpToDate = (date: Date) => {
@@ -1722,6 +1864,35 @@ function App() {
       lastX: event.clientX,
       stepWidth: Math.max(event.currentTarget.getBoundingClientRect().width / Math.max(timelineDays.length, 1), 1),
     }
+  }
+
+  const startMemberRowReorder = (
+    event: ReactMouseEvent<HTMLDivElement>,
+    memberId: string,
+  ) => {
+    if (event.button !== 0 || isTaskTimelineInteracting || isDraggingSelection) {
+      return
+    }
+
+    const visibleMemberIds = memberRows.map((row) => row.member.id)
+    const originalIndex = visibleMemberIds.indexOf(memberId)
+
+    if (originalIndex === -1 || visibleMemberIds.length <= 1) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    setContextMenu(null)
+    setPendingTaskCoachId(null)
+    setTaskCoach(null)
+
+    syncMemberRowReorder({
+      memberId,
+      previewIndex: originalIndex,
+      startY: event.clientY,
+      currentY: event.clientY,
+    })
   }
 
   useEffect(() => {
@@ -1868,6 +2039,7 @@ function App() {
     setPendingTaskCoachId(null)
     setTaskCoach(null)
     setRecordView(nextView)
+    setRecordPage(1)
     setActiveNav('记录中心')
     appendOperationRecord('查看', '记录中心', `打开了${nextView}页面。`)
   }
@@ -2723,6 +2895,99 @@ function App() {
     }
   }, [isTaskTimelineInteracting, membersById, visibleMonthEnd, visibleMonthStart, workspace.tasks])
 
+  useEffect(() => {
+    if (!isMemberRowReordering) {
+      return
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const currentReorder = memberRowReorderRef.current
+      if (!currentReorder) {
+        return
+      }
+
+      const otherMemberIds = timelineVisibleMemberIdsRef.current.filter(
+        (memberId) => memberId !== currentReorder.memberId,
+      )
+      let previewIndex = otherMemberIds.length
+
+      for (let index = 0; index < otherMemberIds.length; index += 1) {
+        const rowElement = timelineRowRefs.current[otherMemberIds[index]]
+        if (!rowElement) {
+          continue
+        }
+
+        const rowRect = rowElement.getBoundingClientRect()
+        if (event.clientY < rowRect.top + rowRect.height / 2) {
+          previewIndex = index
+          break
+        }
+      }
+
+      if (
+        previewIndex === currentReorder.previewIndex &&
+        event.clientY === currentReorder.currentY
+      ) {
+        return
+      }
+
+      syncMemberRowReorder({
+        ...currentReorder,
+        currentY: event.clientY,
+        previewIndex,
+      })
+    }
+
+    const handleMouseUp = () => {
+      const currentReorder = memberRowReorderRef.current
+      syncMemberRowReorder(null)
+
+      if (!currentReorder) {
+        return
+      }
+
+      const visibleMemberIds = timelineVisibleMemberIdsRef.current
+      const otherMemberIds = visibleMemberIds.filter(
+        (memberId) => memberId !== currentReorder.memberId,
+      )
+      const nextVisibleMemberIds = [
+        ...otherMemberIds.slice(0, currentReorder.previewIndex),
+        currentReorder.memberId,
+        ...otherMemberIds.slice(currentReorder.previewIndex),
+      ]
+      const hasChanged = nextVisibleMemberIds.some(
+        (memberId, index) => memberId !== visibleMemberIds[index],
+      )
+
+      if (!hasChanged) {
+        return
+      }
+
+      const draggedMember = membersById[currentReorder.memberId]
+
+      setWorkspace((current) => ({
+        ...current,
+        members: reorderVisibleMembers(current.members, nextVisibleMemberIds),
+      }))
+
+      if (draggedMember) {
+        appendOperationRecord(
+          '修改',
+          `成员顺序 / ${draggedMember.name}`,
+          `已在资源排期中调整 ${draggedMember.name} 的上下位置。`,
+        )
+      }
+    }
+
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [appendOperationRecord, isMemberRowReordering, membersById])
+
   const handleSaveEdit = () => {
     if (!editModal) {
       return
@@ -2853,12 +3118,12 @@ function App() {
     appendOperationRecord('导出', '工作区 JSON', '已导出当前本地工作区数据。')
   }
 
-  const navItems: NavSection[] = ['总览', '组织管理', '资源排期', '项目进度', '团队协作', '记录中心']
+  const navItems: NavSection[] = ['总览', '资源排期', '组织管理', '记录中心']
 
   return (
     <div
       className={
-        isResourceManagementPage || isOverviewPage
+        isFixedWorkspacePage
           ? 'dashboard-shell dashboard-shell-fixed'
           : 'dashboard-shell'
       }
@@ -2901,13 +3166,7 @@ function App() {
         </nav>
       </aside>
 
-      <main
-        className={
-          isResourceManagementPage || isOverviewPage
-            ? 'main-panel main-panel-fixed'
-            : 'main-panel'
-        }
-      >
+      <main className={mainPanelClassName}>
         {isRecordsPage ? (
           <>
             <header className="topbar records-topbar">
@@ -2948,7 +3207,10 @@ function App() {
                       <select
                         className="toolbar-select"
                         value={recordView}
-                        onChange={(event) => setRecordView(event.target.value as RecordView)}
+                        onChange={(event) => {
+                          setRecordView(event.target.value as RecordView)
+                          setRecordPage(1)
+                        }}
                       >
                         <option value="更新记录">更新记录</option>
                         <option value="操作记录">操作记录</option>
@@ -2957,9 +3219,16 @@ function App() {
                   </div>
                 </div>
 
+                <div className="records-meta-bar">
+                  <span>
+                    {recordView === '更新记录' ? '版本记录' : '操作记录'}共 {recordTotalCount} 条
+                  </span>
+                  <span>每页 {RECORD_PAGE_SIZE} 条</span>
+                </div>
+
                 <div className="records-table-wrap">
                   {recordView === '更新记录' ? (
-                    <table className="records-table">
+                    <table className="records-table records-table-updates">
                       <thead>
                         <tr>
                           <th>版本号</th>
@@ -2975,7 +3244,7 @@ function App() {
                             </td>
                           </tr>
                         ) : (
-                          workspace.updateRecords.map((record) => (
+                          visibleUpdateRecords.map((record) => (
                             <tr key={record.id}>
                               <td>
                                 <strong>{record.version}</strong>
@@ -2994,7 +3263,7 @@ function App() {
                       </tbody>
                     </table>
                   ) : (
-                    <table className="records-table">
+                    <table className="records-table records-table-operations">
                       <thead>
                         <tr>
                           <th>操作人</th>
@@ -3012,15 +3281,21 @@ function App() {
                             </td>
                           </tr>
                         ) : (
-                          workspace.operationRecords.map((record) => (
+                          visibleOperationRecords.map((record) => (
                             <tr key={record.id}>
-                              <td>{record.actor}</td>
+                              <td title={record.actor}>
+                                <span className="records-cell-ellipsis">{record.actor}</span>
+                              </td>
                               <td>{record.time}</td>
                               <td>
                                 <span className="record-action-chip">{record.action}</span>
                               </td>
-                              <td>{record.target}</td>
-                              <td>{record.detail}</td>
+                              <td title={record.target}>
+                                <span className="records-cell-ellipsis">{record.target}</span>
+                              </td>
+                              <td title={record.detail}>
+                                <span className="records-cell-ellipsis">{record.detail}</span>
+                              </td>
                             </tr>
                           ))
                         )}
@@ -3028,6 +3303,38 @@ function App() {
                     </table>
                   )}
                 </div>
+
+                {recordTotalPages > 1 ? (
+                  <div className="table-footer records-table-footer">
+                    <div className="table-pagination">
+                      <button
+                        className="ghost-button table-page-button"
+                        onClick={() =>
+                          setRecordPage((current) =>
+                            Math.max(1, Math.min(current, recordTotalPages) - 1),
+                          )
+                        }
+                        disabled={effectiveRecordPage === 1}
+                      >
+                        上一页
+                      </button>
+                      <span className="table-page-status">
+                        第 {effectiveRecordPage} / {recordTotalPages} 页
+                      </span>
+                      <button
+                        className="ghost-button table-page-button"
+                        onClick={() =>
+                          setRecordPage((current) =>
+                            Math.min(recordTotalPages, Math.min(current, recordTotalPages) + 1),
+                          )
+                        }
+                        disabled={effectiveRecordPage === recordTotalPages}
+                      >
+                        下一页
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </article>
             </section>
           </>
@@ -3176,7 +3483,6 @@ function App() {
                                   {member.role} · {teamsById[member.teamId]?.name ?? '未分配团队'}
                                 </span>
                                 <span className="resource-nav-meta">
-                                  <em>周容量 {member.capacityHours} 小时</em>
                                   <em>负责 {memberTaskCounts[member.id] ?? 0} 个项目</em>
                                 </span>
                               </span>
@@ -3373,7 +3679,6 @@ function App() {
                                         <span className="resource-member-card-copy">
                                           <strong>{member.name}</strong>
                                           <span>{member.role}</span>
-                                          <span>周容量 {member.capacityHours} 小时</span>
                                         </span>
                                       </button>
                                     ))}
@@ -3430,7 +3735,7 @@ function App() {
                             <div>
                               <p className="caps">成员编辑</p>
                               <h4>{memberEditor.mode === 'create' ? '新建成员' : '编辑成员'}</h4>
-                              <p className="resource-section-copy">统一维护成员角色、团队归属和可用产能，减少排期时反复确认。</p>
+                              <p className="resource-section-copy">统一维护成员角色与团队归属，减少排期时反复确认。</p>
                             </div>
                             <button
                               className="icon-button resource-form-dismiss"
@@ -3532,28 +3837,6 @@ function App() {
                                 }
                               />
                             </label>
-
-                            <label>
-                              周容量（小时）
-                              <input
-                                type="number"
-                                min={1}
-                                value={memberEditor.draft.capacityHours}
-                                onChange={(event) =>
-                                  setMemberEditor((current) =>
-                                    current
-                                      ? {
-                                          ...current,
-                                          draft: {
-                                            ...current.draft,
-                                            capacityHours: Number(event.target.value),
-                                          },
-                                        }
-                                      : current,
-                                  )
-                                }
-                              />
-                            </label>
                           </div>
 
                           <div className="dialog-actions">
@@ -3583,9 +3866,6 @@ function App() {
                                   <span className="resource-meta-pill">
                                     {activeResourceMemberTeam?.name ?? '未分配团队'}
                                   </span>
-                                  <span className="resource-meta-pill">
-                                    周容量 {activeResourceMember.capacityHours} 小时
-                                  </span>
                                 </div>
                               </div>
                             </div>
@@ -3611,10 +3891,6 @@ function App() {
                             <article className="resource-metric-card">
                               <span>所属团队</span>
                               <strong>{activeResourceMemberTeam?.name ?? '未分配'}</strong>
-                            </article>
-                            <article className="resource-metric-card">
-                              <span>周容量</span>
-                              <strong>{activeResourceMember.capacityHours} 小时</strong>
                             </article>
                             <article className="resource-metric-card">
                               <span>负责项目</span>
@@ -4366,7 +4642,8 @@ function App() {
                         </div>
                       </div>
 
-                      <div className="timeline-body">
+                      <div className="timeline-body-scroll">
+                        <div className="timeline-body">
                         {memberRows.length === 0 ? (
                           <div className="timeline-empty">当前筛选下没有可展示的成员，请重新选择成员范围。</div>
                         ) : (
@@ -4421,13 +4698,37 @@ function App() {
                             : visibleMonthStart
                           const previewLabel = `${previewStartDate.getMonth() + 1}/${previewStartDate.getDate()} - ${previewEndDate.getMonth() + 1}/${previewEndDate.getDate()}`
                           const rowLaneCount = rowTasks.length + (hasDragPreview ? 1 : 0)
+                          const isRowBeingReordered = memberRowReorder?.memberId === row.member.id
+                          const rowDragOffset = isRowBeingReordered
+                            ? memberRowReorder.currentY - memberRowReorder.startY
+                            : 0
 
                           return (
                             <div
                               key={row.member.id}
-                              className={`person-row row-tone-${(rowIndex % 4) + 1}`}
+                              ref={(element) => {
+                                timelineRowRefs.current[row.member.id] = element
+                              }}
+                              className={[
+                                'person-row',
+                                `row-tone-${(rowIndex % 4) + 1}`,
+                                isRowBeingReordered ? 'is-reordering' : '',
+                              ]
+                                .filter(Boolean)
+                                .join(' ')}
+                              style={
+                                isRowBeingReordered
+                                  ? {
+                                      transform: `translateY(${rowDragOffset}px)`,
+                                      zIndex: 4,
+                                    }
+                                  : undefined
+                              }
                             >
-                              <div className="person-meta">
+                              <div
+                                className="person-meta"
+                                onMouseDown={(event) => startMemberRowReorder(event, row.member.id)}
+                              >
                                 <strong>{row.member.name}</strong>
                               </div>
 
@@ -4533,6 +4834,7 @@ function App() {
                           )
                         })
                         )}
+                        </div>
                       </div>
                     </div>
                   </div>
