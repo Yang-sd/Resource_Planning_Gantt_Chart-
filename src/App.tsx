@@ -150,6 +150,8 @@ type ResourceDeleteTarget = {
   name: string
 } | null
 
+type ResourcePanelTab = 'team' | 'member'
+
 type DragSelectionState = {
   memberId: string
   anchorDay: number
@@ -189,13 +191,29 @@ type TimelineBrowseState = {
   stepWidth: number
 } | null
 
+type HolidayCalendarPeriodKind = 'holiday' | 'makeup-workday'
+
+type HolidayCalendarPeriod = {
+  id: string
+  name: string
+  start: string
+  end: string
+  kind: HolidayCalendarPeriodKind
+}
+
+type HolidayCalendarDayInfo = {
+  holidayLabels: string[]
+  makeupWorkdayLabels: string[]
+}
+
 type TimelineDay = {
   key: string
   date: Date
   dayLabel: string
   weekdayLabel: string
-  holidayLabel: string | null
+  specialDayLabel: string | null
   isHoliday: boolean
+  isMakeupWorkday: boolean
   isToday: boolean
   isFocused: boolean
   isWeekend: boolean
@@ -203,7 +221,14 @@ type TimelineDay = {
   isMonthStart: boolean
 }
 
-type NavSection = '总览' | '资源排期' | '项目进度' | '团队协作' | '记录中心' | '账号管理'
+type NavSection =
+  | '总览'
+  | '组织管理'
+  | '资源排期'
+  | '项目进度'
+  | '团队协作'
+  | '记录中心'
+  | '账号管理'
 type RecordView = '更新记录' | '操作记录'
 type OverviewDurationFilter = '1天' | '2-3天' | '4-7天' | '8天以上'
 type OverviewFilterMenu = 'owner' | 'status' | 'priority' | 'duration' | null
@@ -217,16 +242,24 @@ const OVERVIEW_PAGE_SIZE = 10
 const priorityOrder: Priority[] = ['P0', 'P1', 'P2', 'P3', 'P4', 'P5']
 const CURRENT_OPERATOR = '当前用户'
 
-const CHINA_LEGAL_HOLIDAY_PERIODS_2026 = [
-  { id: 'yuan-dan', name: '元旦', start: '2026-01-01', end: '2026-01-03' },
-  { id: 'chun-jie', name: '春节', start: '2026-02-15', end: '2026-02-23' },
-  { id: 'qing-ming', name: '清明节', start: '2026-04-04', end: '2026-04-06' },
-  { id: 'lao-dong', name: '劳动节', start: '2026-05-01', end: '2026-05-05' },
-  { id: 'duan-wu', name: '端午节', start: '2026-06-19', end: '2026-06-21' },
-  { id: 'zhong-qiu', name: '中秋节', start: '2026-09-25', end: '2026-09-27' },
-  { id: 'guo-qing', name: '国庆节', start: '2026-10-01', end: '2026-10-07' },
-] as const
-const CHINA_LEGAL_HOLIDAY_MAP_2026 = buildHolidayMap(CHINA_LEGAL_HOLIDAY_PERIODS_2026)
+const CHINA_OFFICIAL_HOLIDAY_CALENDAR_2026: HolidayCalendarPeriod[] = [
+  { id: 'yuan-dan', name: '元旦', start: '2026-01-01', end: '2026-01-03', kind: 'holiday' },
+  { id: 'yuan-dan-workday', name: '元旦', start: '2026-01-04', end: '2026-01-04', kind: 'makeup-workday' },
+  { id: 'chun-jie', name: '春节', start: '2026-02-15', end: '2026-02-23', kind: 'holiday' },
+  { id: 'chun-jie-workday-1', name: '春节', start: '2026-02-14', end: '2026-02-14', kind: 'makeup-workday' },
+  { id: 'chun-jie-workday-2', name: '春节', start: '2026-02-28', end: '2026-02-28', kind: 'makeup-workday' },
+  { id: 'qing-ming', name: '清明节', start: '2026-04-04', end: '2026-04-06', kind: 'holiday' },
+  { id: 'lao-dong', name: '劳动节', start: '2026-05-01', end: '2026-05-05', kind: 'holiday' },
+  { id: 'lao-dong-workday', name: '劳动节', start: '2026-05-09', end: '2026-05-09', kind: 'makeup-workday' },
+  { id: 'duan-wu', name: '端午节', start: '2026-06-19', end: '2026-06-21', kind: 'holiday' },
+  { id: 'zhong-qiu', name: '中秋节', start: '2026-09-25', end: '2026-09-27', kind: 'holiday' },
+  { id: 'guo-qing-workday', name: '国庆节', start: '2026-09-20', end: '2026-09-20', kind: 'makeup-workday' },
+  { id: 'guo-qing', name: '国庆节', start: '2026-10-01', end: '2026-10-07', kind: 'holiday' },
+  { id: 'guo-qing-workday-2', name: '国庆节', start: '2026-10-10', end: '2026-10-10', kind: 'makeup-workday' },
+]
+const CHINA_OFFICIAL_HOLIDAY_CALENDAR_MAP_2026 = buildHolidayCalendarMap(
+  CHINA_OFFICIAL_HOLIDAY_CALENDAR_2026,
+)
 
 const SEEDED_UPDATE_RECORDS: ReleaseRecord[] = [
   {
@@ -628,16 +661,42 @@ function buildDateRangeKeys(start: string, end: string) {
   )
 }
 
-function buildHolidayMap(
-  periods: ReadonlyArray<{ name: string; start: string; end: string }>,
-) {
+function buildHolidayCalendarMap(periods: ReadonlyArray<HolidayCalendarPeriod>) {
   return periods.reduce((map, period) => {
     buildDateRangeKeys(period.start, period.end).forEach((dateKey) => {
-      const labels = map.get(dateKey) ?? []
-      map.set(dateKey, [...labels, period.name])
+      const calendarInfo = map.get(dateKey) ?? { holidayLabels: [], makeupWorkdayLabels: [] }
+
+      if (period.kind === 'holiday') {
+        map.set(dateKey, {
+          ...calendarInfo,
+          holidayLabels: [...calendarInfo.holidayLabels, period.name],
+        })
+        return
+      }
+
+      map.set(dateKey, {
+        ...calendarInfo,
+        makeupWorkdayLabels: [...calendarInfo.makeupWorkdayLabels, period.name],
+      })
     })
     return map
-  }, new Map<string, string[]>())
+  }, new Map<string, HolidayCalendarDayInfo>())
+}
+
+function formatTimelineSpecialDayLabel(dayInfo?: HolidayCalendarDayInfo) {
+  if (!dayInfo) {
+    return null
+  }
+
+  const labels: string[] = []
+  if (dayInfo.holidayLabels.length > 0) {
+    labels.push(`${dayInfo.holidayLabels.join(' / ')}假期`)
+  }
+  if (dayInfo.makeupWorkdayLabels.length > 0) {
+    labels.push(`${dayInfo.makeupWorkdayLabels.join(' / ')}调休上班`)
+  }
+
+  return labels.length > 0 ? labels.join('；') : null
 }
 
 function formatCalendarDateLabel(date: Date) {
@@ -823,7 +882,7 @@ function buildTimelineDays(
   windowStart: Date,
   windowEnd: Date,
   focusedDate: Date | null,
-  holidayMap?: Map<string, string[]>,
+  holidayCalendarMap?: Map<string, HolidayCalendarDayInfo>,
 ) {
   const today = normalizeDate(BASE_DATE)
   const normalizedFocus = focusedDate ? normalizeDate(focusedDate) : null
@@ -831,16 +890,21 @@ function buildTimelineDays(
 
   return Array.from({ length: dayCount }, (_, index) => {
     const date = addCalendarDays(windowStart, index)
+    const dateKey = formatDateInputValue(date)
+    const calendarInfo = holidayCalendarMap?.get(dateKey)
     const weekdayIndex = date.getDay()
     const weekdayLabel = ['日', '一', '二', '三', '四', '五', '六'][weekdayIndex] ?? '日'
+    const isHoliday = (calendarInfo?.holidayLabels.length ?? 0) > 0
+    const isMakeupWorkday = (calendarInfo?.makeupWorkdayLabels.length ?? 0) > 0
 
     return {
-      key: formatDateInputValue(date),
+      key: dateKey,
       date,
       dayLabel: `${date.getMonth() + 1}.${String(date.getDate()).padStart(2, '0')}`,
       weekdayLabel: `周${weekdayLabel}`,
-      holidayLabel: holidayMap?.get(formatDateInputValue(date))?.join(' / ') ?? null,
-      isHoliday: (holidayMap?.get(formatDateInputValue(date))?.length ?? 0) > 0,
+      specialDayLabel: formatTimelineSpecialDayLabel(calendarInfo),
+      isHoliday,
+      isMakeupWorkday,
       isFocused: normalizedFocus ? diffCalendarDays(date, normalizedFocus) === 0 : false,
       isToday: diffCalendarDays(date, today) === 0,
       isWeekend: weekdayIndex === 0 || weekdayIndex === 6,
@@ -942,6 +1006,7 @@ function App() {
   const [overviewPriorityFilter, setOverviewPriorityFilter] = useState<Priority[]>([])
   const [overviewDurationFilter, setOverviewDurationFilter] = useState<OverviewDurationFilter[]>([])
   const [overviewFilterMenu, setOverviewFilterMenu] = useState<OverviewFilterMenu>(null)
+  const [overviewSelectedTaskIds, setOverviewSelectedTaskIds] = useState<string[]>([])
   const [timelineStartDate, setTimelineStartDate] = useState(() => startOfWeek(BASE_DATE))
   const [focusedDate, setFocusedDate] = useState(() => normalizeDate(BASE_DATE))
   const [isDateJumpOpen, setIsDateJumpOpen] = useState(false)
@@ -950,11 +1015,19 @@ function App() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null)
   const [editModal, setEditModal] = useState<EditModalState>(null)
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
-  const [isResourceModalOpen, setIsResourceModalOpen] = useState(false)
+  const [overviewDeleteTargetIds, setOverviewDeleteTargetIds] = useState<string[]>([])
   const [teamEditor, setTeamEditor] = useState<TeamEditorState>(null)
   const [memberEditor, setMemberEditor] = useState<MemberEditorState>(null)
   const [resourceNotice, setResourceNotice] = useState<ResourceNoticeState>(null)
   const [resourceDeleteTarget, setResourceDeleteTarget] = useState<ResourceDeleteTarget>(null)
+  const [resourcePanelTab, setResourcePanelTab] = useState<ResourcePanelTab>('team')
+  const [resourceSearchValue, setResourceSearchValue] = useState('')
+  const [selectedResourceTeamId, setSelectedResourceTeamId] = useState(
+    () => defaultWorkspace.teams[0]?.id ?? '',
+  )
+  const [selectedResourceMemberId, setSelectedResourceMemberId] = useState(
+    () => defaultWorkspace.members[0]?.id ?? '',
+  )
   const [dragSelection, setDragSelection] = useState<DragSelectionState>(null)
   const [taskTimelineInteraction, setTaskTimelineInteraction] =
     useState<TaskTimelineInteractionState>(null)
@@ -985,7 +1058,7 @@ function App() {
         setContextMenu(null)
         setEditModal(null)
         setDeleteTargetId(null)
-        setIsResourceModalOpen(false)
+        setOverviewDeleteTargetIds([])
         setTeamEditor(null)
         setMemberEditor(null)
         setResourceNotice(null)
@@ -1072,7 +1145,8 @@ function App() {
         isEditableKeyboardTarget(event.target) ||
         editModal ||
         deleteTargetId ||
-        isResourceModalOpen ||
+        overviewDeleteTargetIds.length > 0 ||
+        activeNav === '组织管理' ||
         teamEditor ||
         memberEditor ||
         resourceDeleteTarget
@@ -1097,8 +1171,9 @@ function App() {
   }, [
     deleteTargetId,
     editModal,
-    isResourceModalOpen,
+    activeNav,
     memberEditor,
+    overviewDeleteTargetIds,
     resourceDeleteTarget,
     selectedTaskId,
     teamEditor,
@@ -1153,6 +1228,25 @@ function App() {
       ),
     [tasksSnapshot, workspace.members],
   )
+
+  useEffect(() => {
+    setSelectedResourceTeamId((current) =>
+      workspace.teams.some((team) => team.id === current) ? current : (workspace.teams[0]?.id ?? ''),
+    )
+  }, [workspace.teams])
+
+  useEffect(() => {
+    setSelectedResourceMemberId((current) =>
+      workspace.members.some((member) => member.id === current)
+        ? current
+        : (workspace.members[0]?.id ?? ''),
+    )
+  }, [workspace.members])
+
+  useEffect(() => {
+    setResourceSearchValue('')
+  }, [resourcePanelTab])
+
   const visibleMonthStart = useMemo(
     () => normalizeDate(timelineStartDate),
     [timelineStartDate],
@@ -1173,7 +1267,7 @@ function App() {
         visibleMonthStart,
         visibleMonthEnd,
         isFocusedDateInVisibleMonth ? focusedDate : null,
-        isHolidayHighlightEnabled ? CHINA_LEGAL_HOLIDAY_MAP_2026 : undefined,
+        isHolidayHighlightEnabled ? CHINA_OFFICIAL_HOLIDAY_CALENDAR_MAP_2026 : undefined,
       ),
     [
       focusedDate,
@@ -1339,9 +1433,65 @@ function App() {
     const startIndex = (effectiveOverviewPage - 1) * OVERVIEW_PAGE_SIZE
     return overviewTasks.slice(startIndex, startIndex + OVERVIEW_PAGE_SIZE)
   }, [effectiveOverviewPage, overviewTasks])
+  const overviewTaskIds = useMemo(() => overviewTasks.map((task) => task.id), [overviewTasks])
+  const overviewVisibleTaskIds = useMemo(
+    () => overviewVisibleTasks.map((task) => task.id),
+    [overviewVisibleTasks],
+  )
+  const overviewTaskIdSet = useMemo(() => new Set(overviewTaskIds), [overviewTaskIds])
+  const overviewSelectedTaskSet = useMemo(
+    () => new Set(overviewSelectedTaskIds),
+    [overviewSelectedTaskIds],
+  )
+  const overviewSelectedVisibleCount = overviewVisibleTaskIds.filter((taskId) =>
+    overviewSelectedTaskSet.has(taskId),
+  ).length
+  const isAllOverviewTasksSelected =
+    overviewTasks.length > 0 && overviewSelectedTaskIds.length === overviewTasks.length
+  const isAllOverviewVisibleTasksSelected =
+    overviewVisibleTasks.length > 0 &&
+    overviewSelectedVisibleCount === overviewVisibleTasks.length
+  const isSomeOverviewVisibleTasksSelected =
+    overviewSelectedVisibleCount > 0 && !isAllOverviewVisibleTasksSelected
+
+  useEffect(() => {
+    setOverviewSelectedTaskIds((current) => {
+      const next = current.filter((taskId) => overviewTaskIdSet.has(taskId))
+      return next.length === current.length ? current : next
+    })
+  }, [overviewTaskIdSet])
+
   const overviewSelectedTaskId = overviewVisibleTasks.some((task) => task.id === selectedTaskId)
     ? selectedTaskId
     : overviewVisibleTasks[0]?.id ?? null
+  const toggleOverviewTaskSelection = (taskId: string) => {
+    setOverviewSelectedTaskIds((current) =>
+      current.includes(taskId) ? current.filter((item) => item !== taskId) : [...current, taskId],
+    )
+  }
+  const toggleOverviewVisibleTaskSelection = () => {
+    if (overviewVisibleTaskIds.length === 0) {
+      return
+    }
+
+    const visibleTaskIdSet = new Set(overviewVisibleTaskIds)
+    setOverviewSelectedTaskIds((current) => {
+      const areAllVisibleSelected = overviewVisibleTaskIds.every((taskId) => current.includes(taskId))
+      if (areAllVisibleSelected) {
+        return current.filter((taskId) => !visibleTaskIdSet.has(taskId))
+      }
+
+      const nextSelection = new Set(current)
+      overviewVisibleTaskIds.forEach((taskId) => nextSelection.add(taskId))
+      return Array.from(nextSelection)
+    })
+  }
+  const selectAllOverviewTasks = () => {
+    setOverviewSelectedTaskIds(overviewTaskIds)
+  }
+  const clearOverviewTaskSelection = () => {
+    setOverviewSelectedTaskIds([])
+  }
   const ganttTasks = useMemo(
     () => tasksSnapshot.filter((task) => statusFilter === '全部状态' || task.status === statusFilter),
     [statusFilter, tasksSnapshot],
@@ -1392,7 +1542,77 @@ function App() {
   const isDraggingSelection = dragSelection !== null
   const isTaskTimelineInteracting = taskTimelineInteraction !== null
   const isRecordsPage = activeNav === '记录中心'
-  const isOverviewPage = !isRecordsPage && activeNav !== '资源排期'
+  const isResourceManagementPage = activeNav === '组织管理'
+  const isOverviewPage =
+    !isRecordsPage && activeNav !== '资源排期' && !isResourceManagementPage
+  const activeResourceTeam = teamsById[selectedResourceTeamId] ?? workspace.teams[0] ?? null
+  const activeResourceMember = membersById[selectedResourceMemberId] ?? workspace.members[0] ?? null
+  const activeResourceTeamMembers = useMemo(
+    () =>
+      activeResourceTeam
+        ? workspace.members.filter((member) => member.teamId === activeResourceTeam.id)
+        : [],
+    [activeResourceTeam, workspace.members],
+  )
+  const activeResourceTeamTasks = useMemo(
+    () =>
+      activeResourceTeam ? workspace.tasks.filter((task) => task.teamId === activeResourceTeam.id) : [],
+    [activeResourceTeam, workspace.tasks],
+  )
+  const activeResourceMemberTeam = activeResourceMember
+    ? teamsById[activeResourceMember.teamId] ?? null
+    : null
+  const activeResourceMemberTasks = useMemo(
+    () =>
+      activeResourceMember
+        ? workspace.tasks.filter((task) => task.ownerId === activeResourceMember.id)
+        : [],
+    [activeResourceMember, workspace.tasks],
+  )
+  const normalizedResourceSearch = resourceSearchValue.trim().toLowerCase()
+  const filteredResourceTeams = useMemo(
+    () =>
+      workspace.teams.filter((team) => {
+        if (!normalizedResourceSearch) {
+          return true
+        }
+
+        return (
+          team.name.toLowerCase().includes(normalizedResourceSearch) ||
+          team.lead.toLowerCase().includes(normalizedResourceSearch)
+        )
+      }),
+    [normalizedResourceSearch, workspace.teams],
+  )
+  const filteredResourceMembers = useMemo(
+    () =>
+      workspace.members.filter((member) => {
+        if (!normalizedResourceSearch) {
+          return true
+        }
+
+        return (
+          member.name.toLowerCase().includes(normalizedResourceSearch) ||
+          member.role.toLowerCase().includes(normalizedResourceSearch) ||
+          (teamsById[member.teamId]?.name ?? '').toLowerCase().includes(normalizedResourceSearch)
+        )
+      }),
+    [normalizedResourceSearch, teamsById, workspace.members],
+  )
+  const activeResourcePanelTitle = resourcePanelTab === 'team' ? '团队目录' : '成员目录'
+  const activeResourcePanelCopy =
+    resourcePanelTab === 'team'
+      ? '按团队快速浏览负责人、成员规模和项目负载，右侧统一查看与编辑。'
+      : '按成员集中查看角色、归属团队与负责项目，减少来回切换确认。'
+  const deleteConfirmTaskIds = deleteTargetId ? [deleteTargetId] : overviewDeleteTargetIds
+  const deleteConfirmTaskIdSet = new Set(deleteConfirmTaskIds)
+  const deleteConfirmTasks = workspace.tasks.filter((task) => deleteConfirmTaskIdSet.has(task.id))
+  const deleteConfirmCount = deleteConfirmTaskIds.length
+  const isBulkDeleteConfirm = !deleteTargetId && overviewDeleteTargetIds.length > 0
+  const deleteConfirmPreview = deleteConfirmTasks
+    .slice(0, 3)
+    .map((task) => task.title)
+    .join('、')
   const pendingJumpDate = useMemo(
     () =>
       resolveValidDate(
@@ -1797,7 +2017,23 @@ function App() {
 
   const openDeleteConfirm = (taskId: string) => {
     setContextMenu(null)
+    setOverviewDeleteTargetIds([])
     setDeleteTargetId(taskId)
+  }
+
+  const closeDeleteConfirm = () => {
+    setDeleteTargetId(null)
+    setOverviewDeleteTargetIds([])
+  }
+
+  const openBulkDeleteConfirm = () => {
+    if (overviewSelectedTaskIds.length === 0) {
+      return
+    }
+
+    setContextMenu(null)
+    setDeleteTargetId(null)
+    setOverviewDeleteTargetIds(overviewSelectedTaskIds)
   }
 
   const openResourceModal = () => {
@@ -1805,20 +2041,16 @@ function App() {
     setResourceNotice(null)
     setTeamEditor(null)
     setMemberEditor(null)
-    setIsResourceModalOpen(true)
-    appendOperationRecord('查看', '组织管理', '打开了团队与成员管理面板。')
-  }
-
-  const closeResourceModal = () => {
-    setIsResourceModalOpen(false)
-    setTeamEditor(null)
-    setMemberEditor(null)
-    setResourceNotice(null)
+    setResourceSearchValue('')
     setResourceDeleteTarget(null)
+    setResourcePanelTab('team')
+    setActiveNav('组织管理')
+    appendOperationRecord('查看', '组织管理', '打开了团队与成员管理页面。')
   }
 
   const openTeamCreate = () => {
     setResourceNotice(null)
+    setResourcePanelTab('team')
     setTeamEditor({
       mode: 'create',
       draft: createTeamDraft(),
@@ -1832,6 +2064,8 @@ function App() {
     }
 
     setResourceNotice(null)
+    setResourcePanelTab('team')
+    setSelectedResourceTeamId(teamId)
     setTeamEditor({
       mode: 'edit',
       teamId,
@@ -1839,7 +2073,7 @@ function App() {
     })
   }
 
-  const openMemberCreate = () => {
+  const openMemberCreate = (preferredTeamIdOverride?: string) => {
     if (workspace.teams.length === 0) {
       setResourceNotice({
         tone: 'danger',
@@ -1849,9 +2083,14 @@ function App() {
     }
 
     const preferredTeamId =
-      teamFilter !== '全部团队' && teamsById[teamFilter] ? teamFilter : workspace.teams[0]?.id
+      preferredTeamIdOverride && teamsById[preferredTeamIdOverride]
+        ? preferredTeamIdOverride
+        : teamFilter !== '全部团队' && teamsById[teamFilter]
+          ? teamFilter
+          : workspace.teams[0]?.id
 
     setResourceNotice(null)
+    setResourcePanelTab('member')
     setMemberEditor({
       mode: 'create',
       draft: createMemberDraft(undefined, preferredTeamId),
@@ -1865,12 +2104,50 @@ function App() {
     }
 
     setResourceNotice(null)
+    setResourcePanelTab('member')
+    setSelectedResourceMemberId(memberId)
     setMemberEditor({
       mode: 'edit',
       memberId,
       draft: createMemberDraft(member),
     })
   }
+
+  const selectResourceTeam = (teamId: string) => {
+    setResourcePanelTab('team')
+    setSelectedResourceTeamId(teamId)
+    setTeamEditor(null)
+  }
+
+  const selectResourceMember = (memberId: string) => {
+    setResourcePanelTab('member')
+    setSelectedResourceMemberId(memberId)
+    setMemberEditor(null)
+  }
+
+  useEffect(() => {
+    if (resourcePanelTab !== 'team' || !normalizedResourceSearch || filteredResourceTeams.length === 0) {
+      return
+    }
+
+    if (!filteredResourceTeams.some((team) => team.id === selectedResourceTeamId)) {
+      setSelectedResourceTeamId(filteredResourceTeams[0].id)
+    }
+  }, [filteredResourceTeams, normalizedResourceSearch, resourcePanelTab, selectedResourceTeamId])
+
+  useEffect(() => {
+    if (
+      resourcePanelTab !== 'member' ||
+      !normalizedResourceSearch ||
+      filteredResourceMembers.length === 0
+    ) {
+      return
+    }
+
+    if (!filteredResourceMembers.some((member) => member.id === selectedResourceMemberId)) {
+      setSelectedResourceMemberId(filteredResourceMembers[0].id)
+    }
+  }, [filteredResourceMembers, normalizedResourceSearch, resourcePanelTab, selectedResourceMemberId])
 
   const openTeamDeleteConfirm = (teamId: string) => {
     const team = teamsById[teamId]
@@ -1947,6 +2224,7 @@ function App() {
         tone: 'success',
         message: `团队“${newTeam.name}”创建成功。`,
       })
+      setSelectedResourceTeamId(newTeam.id)
     } else if (teamEditor.teamId) {
       setWorkspace((current) => ({
         ...current,
@@ -1959,6 +2237,7 @@ function App() {
         tone: 'success',
         message: `团队“${draft.name}”保存成功。`,
       })
+      setSelectedResourceTeamId(teamEditor.teamId)
     }
 
     setTeamEditor(null)
@@ -2012,6 +2291,7 @@ function App() {
         tone: 'success',
         message: `成员“${newMember.name}”创建成功。`,
       })
+      setSelectedResourceMemberId(newMember.id)
     } else if (memberEditor.memberId) {
       const previousMember = membersById[memberEditor.memberId]
 
@@ -2039,6 +2319,7 @@ function App() {
         tone: 'success',
         message: `成员“${draft.name}”保存成功。`,
       })
+      setSelectedResourceMemberId(memberEditor.memberId)
     }
 
     setMemberEditor(null)
@@ -2494,28 +2775,47 @@ function App() {
   }
 
   const handleDeleteTask = () => {
-    if (!deleteTargetId) {
+    const deletingIds = deleteTargetId ? [deleteTargetId] : overviewDeleteTargetIds
+    if (deletingIds.length === 0) {
       return
     }
 
-    const deletingTask = workspace.tasks.find((task) => task.id === deleteTargetId)
-    const remainingTasks = workspace.tasks.filter((task) => task.id !== deleteTargetId)
+    const deletingTaskIdSet = new Set(deletingIds)
+    const deletingTasks = workspace.tasks.filter((task) => deletingTaskIdSet.has(task.id))
+    const remainingTasks = workspace.tasks.filter((task) => !deletingTaskIdSet.has(task.id))
 
     setWorkspace((current) => ({
       ...current,
-      tasks: current.tasks.filter((task) => task.id !== deleteTargetId),
+      tasks: current.tasks.filter((task) => !deletingTaskIdSet.has(task.id)),
     }))
 
-    if (selectedTaskId === deleteTargetId) {
+    if (selectedTaskId && deletingTaskIdSet.has(selectedTaskId)) {
       setSelectedTaskId(remainingTasks[0]?.id ?? '')
     }
 
-    appendOperationRecord(
-      '删除',
-      deletingTask ? `项目 / ${deletingTask.title}` : '项目 / 未知项目',
-      deletingTask ? `已删除项目“${deletingTask.title}”。` : '已从当前工作区删除项目。',
-    )
-    setDeleteTargetId(null)
+    setOverviewSelectedTaskIds((current) => current.filter((taskId) => !deletingTaskIdSet.has(taskId)))
+
+    if (deletingIds.length === 1) {
+      const deletingTask = deletingTasks[0]
+      appendOperationRecord(
+        '删除',
+        deletingTask ? `项目 / ${deletingTask.title}` : '项目 / 未知项目',
+        deletingTask ? `已删除项目“${deletingTask.title}”。` : '已从当前工作区删除项目。',
+      )
+    } else {
+      const removedCount = deletingTasks.length > 0 ? deletingTasks.length : deletingIds.length
+      const previewTitles = deletingTasks.slice(0, 3).map((task) => `“${task.title}”`)
+      const previewSuffix =
+        removedCount > previewTitles.length ? ` 等 ${removedCount - previewTitles.length} 个项目。` : '。'
+      const detail =
+        previewTitles.length > 0
+          ? `已批量删除 ${removedCount} 个项目：${previewTitles.join('、')}${previewSuffix}`
+          : `已批量删除 ${removedCount} 个项目。`
+
+      appendOperationRecord('删除', `项目 / 批量删除 ${removedCount} 项`, detail)
+    }
+
+    closeDeleteConfirm()
   }
 
   const handleCreateTask = () => {
@@ -2528,7 +2828,7 @@ function App() {
         tone: 'danger',
         message: '当前还没有成员，请先在组织管理里创建成员后再新增项目。',
       })
-      setIsResourceModalOpen(true)
+      setActiveNav('组织管理')
       return
     }
 
@@ -2553,10 +2853,16 @@ function App() {
     appendOperationRecord('导出', '工作区 JSON', '已导出当前本地工作区数据。')
   }
 
-  const navItems: NavSection[] = ['总览', '资源排期', '项目进度', '团队协作', '记录中心']
+  const navItems: NavSection[] = ['总览', '组织管理', '资源排期', '项目进度', '团队协作', '记录中心']
 
   return (
-    <div className="dashboard-shell">
+    <div
+      className={
+        isResourceManagementPage || isOverviewPage
+          ? 'dashboard-shell dashboard-shell-fixed'
+          : 'dashboard-shell'
+      }
+    >
       <aside className="sidebar">
         <div className="brand-card">
           <div className="brand-mark">RG</div>
@@ -2580,6 +2886,11 @@ function App() {
                   return
                 }
 
+                if (item === '组织管理') {
+                  openResourceModal()
+                  return
+                }
+
                 setActiveNav(item)
               }}
             >
@@ -2590,7 +2901,13 @@ function App() {
         </nav>
       </aside>
 
-      <main className="main-panel">
+      <main
+        className={
+          isResourceManagementPage || isOverviewPage
+            ? 'main-panel main-panel-fixed'
+            : 'main-panel'
+        }
+      >
         {isRecordsPage ? (
           <>
             <header className="topbar records-topbar">
@@ -2716,11 +3033,679 @@ function App() {
           </>
         ) : (
           <>
-            {isOverviewPage ? (
+            {isResourceManagementPage ? (
+              <section className="resource-page">
+                <header className="topbar resource-page-topbar">
+                  <div className="topbar-main">
+                    <h2>团队与成员管理台</h2>
+                  </div>
+                </header>
+
+                {resourceNotice ? (
+                  <div
+                    className={
+                      resourceNotice.tone === 'danger'
+                        ? 'resource-notice is-danger'
+                        : 'resource-notice is-success'
+                    }
+                  >
+                    {resourceNotice.message}
+                  </div>
+                ) : null}
+
+                <section className="gantt-card resource-page-card">
+                  <div className="resource-workspace resource-page-workspace">
+                    <aside className="resource-sidebar resource-page-sidebar">
+                      <div className="resource-panel-tabs" role="tablist" aria-label="组织管理视图切换">
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={resourcePanelTab === 'team'}
+                          className={resourcePanelTab === 'team' ? 'resource-panel-tab is-active' : 'resource-panel-tab'}
+                          onClick={() => setResourcePanelTab('team')}
+                        >
+                          团队视图
+                          <span>{workspace.teams.length}</span>
+                        </button>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={resourcePanelTab === 'member'}
+                          className={resourcePanelTab === 'member' ? 'resource-panel-tab is-active' : 'resource-panel-tab'}
+                          onClick={() => setResourcePanelTab('member')}
+                        >
+                          成员视图
+                          <span>{workspace.members.length}</span>
+                        </button>
+                      </div>
+
+                      <div className="resource-sidebar-head">
+                        <div>
+                          <p className="caps">{activeResourcePanelTitle}</p>
+                          <h4>{resourcePanelTab === 'team' ? '团队清单' : '成员清单'}</h4>
+                          <p className="resource-sidebar-copy">{activeResourcePanelCopy}</p>
+                        </div>
+                        <button
+                          className="ghost-button resource-add-button"
+                          onClick={() => {
+                            if (resourcePanelTab === 'team') {
+                              openTeamCreate()
+                              return
+                            }
+
+                            openMemberCreate()
+                          }}
+                          type="button"
+                        >
+                          {resourcePanelTab === 'team' ? '新增团队' : '新增成员'}
+                        </button>
+                      </div>
+
+                      <div className="resource-sidebar-tools">
+                        <label
+                          className="search-box resource-search-box"
+                          aria-label={resourcePanelTab === 'team' ? '搜索团队或负责人' : '搜索成员、角色或团队'}
+                        >
+                          <input
+                            value={resourceSearchValue}
+                            onChange={(event) => setResourceSearchValue(event.target.value)}
+                            placeholder={resourcePanelTab === 'team' ? '搜索团队名、负责人' : '搜索成员名、角色、团队'}
+                          />
+                        </label>
+                        <span className="resource-sidebar-summary">
+                          {resourcePanelTab === 'team'
+                            ? `显示 ${filteredResourceTeams.length} 个团队`
+                            : `显示 ${filteredResourceMembers.length} 位成员`}
+                        </span>
+                      </div>
+
+                      <div className="resource-sidebar-list">
+                        {resourcePanelTab === 'team' ? (
+                          workspace.teams.length === 0 ? (
+                            <div className="resource-empty">还没有团队，先创建团队再安排成员与项目。</div>
+                          ) : filteredResourceTeams.length === 0 ? (
+                            <div className="resource-empty">没有找到匹配的团队，可以换个关键词再试试。</div>
+                          ) : (
+                            filteredResourceTeams.map((team) => (
+                              <button
+                                key={team.id}
+                                type="button"
+                                className={
+                                  team.id === activeResourceTeam?.id
+                                    ? 'resource-nav-item is-active'
+                                    : 'resource-nav-item'
+                                }
+                                onClick={() => selectResourceTeam(team.id)}
+                              >
+                                <span
+                                  className="resource-swatch resource-nav-icon"
+                                  style={{ background: team.color }}
+                                  aria-hidden="true"
+                                ></span>
+                                <span className="resource-nav-copy">
+                                  <strong>{team.name}</strong>
+                                  <span>{team.lead === '待设置' ? '待设置负责人' : `负责人 ${team.lead}`}</span>
+                                  <span className="resource-nav-meta">
+                                    <em>{teamStats[team.id]?.memberCount ?? 0} 名成员</em>
+                                    <em>{teamStats[team.id]?.taskCount ?? 0} 个项目</em>
+                                  </span>
+                                </span>
+                              </button>
+                            ))
+                          )
+                        ) : workspace.members.length === 0 ? (
+                          <div className="resource-empty">还没有成员，创建成员后才能在时间线上分配项目。</div>
+                        ) : filteredResourceMembers.length === 0 ? (
+                          <div className="resource-empty">没有找到匹配的成员，可以换个关键词再试试。</div>
+                        ) : (
+                          filteredResourceMembers.map((member) => (
+                            <button
+                              key={member.id}
+                              type="button"
+                              className={
+                                member.id === activeResourceMember?.id
+                                  ? 'resource-nav-item is-active'
+                                  : 'resource-nav-item'
+                              }
+                              onClick={() => selectResourceMember(member.id)}
+                            >
+                              <span className="resource-avatar resource-nav-icon">{member.avatar}</span>
+                              <span className="resource-nav-copy">
+                                <strong>{member.name}</strong>
+                                <span>
+                                  {member.role} · {teamsById[member.teamId]?.name ?? '未分配团队'}
+                                </span>
+                                <span className="resource-nav-meta">
+                                  <em>周容量 {member.capacityHours} 小时</em>
+                                  <em>负责 {memberTaskCounts[member.id] ?? 0} 个项目</em>
+                                </span>
+                              </span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </aside>
+
+                    <section className="resource-detail-panel resource-page-detail">
+                      {resourcePanelTab === 'team' ? (
+                        teamEditor ? (
+                          <div className="resource-editor-shell">
+                            <div className="resource-editor-head">
+                              <div>
+                                <p className="caps">团队编辑</p>
+                                <h4>{teamEditor.mode === 'create' ? '新建团队' : '编辑团队'}</h4>
+                                <p className="resource-section-copy">补全团队基础信息后，成员和项目归属会更清晰。</p>
+                              </div>
+                              <button
+                                className="icon-button resource-form-dismiss"
+                                onClick={() => setTeamEditor(null)}
+                                type="button"
+                              >
+                                关闭编辑
+                              </button>
+                            </div>
+
+                            <div className="resource-editor-preview">
+                              <span
+                                className="resource-swatch resource-editor-preview-icon"
+                                style={{ background: teamEditor.draft.color }}
+                                aria-hidden="true"
+                              ></span>
+                              <div className="resource-editor-preview-copy">
+                                <strong>{teamEditor.draft.name.trim() || '未命名团队'}</strong>
+                                <span>{teamEditor.draft.lead.trim() || '待设置负责人'}</span>
+                              </div>
+                            </div>
+
+                            <div className="editor-grid resource-editor-grid">
+                              <label>
+                                团队名称
+                                <input
+                                  placeholder="例如：体验设计组"
+                                  value={teamEditor.draft.name}
+                                  onChange={(event) =>
+                                    setTeamEditor((current) =>
+                                      current
+                                        ? {
+                                            ...current,
+                                            draft: { ...current.draft, name: event.target.value },
+                                          }
+                                        : current,
+                                    )
+                                  }
+                                />
+                              </label>
+
+                              <label>
+                                团队负责人
+                                <input
+                                  placeholder="填写负责人姓名"
+                                  value={teamEditor.draft.lead}
+                                  onChange={(event) =>
+                                    setTeamEditor((current) =>
+                                      current
+                                        ? {
+                                            ...current,
+                                            draft: { ...current.draft, lead: event.target.value },
+                                          }
+                                        : current,
+                                    )
+                                  }
+                                />
+                              </label>
+
+                              <label className="resource-color-field">
+                                主题色
+                                <input
+                                  type="color"
+                                  value={teamEditor.draft.color}
+                                  onChange={(event) =>
+                                    setTeamEditor((current) =>
+                                      current
+                                        ? {
+                                            ...current,
+                                            draft: { ...current.draft, color: event.target.value },
+                                          }
+                                        : current,
+                                    )
+                                  }
+                                />
+                              </label>
+                            </div>
+
+                            <div className="dialog-actions">
+                              <button className="ghost-button" onClick={() => setTeamEditor(null)} type="button">
+                                取消编辑
+                              </button>
+                              <button className="primary-button" onClick={saveTeamEditor} type="button">
+                                保存团队
+                              </button>
+                            </div>
+                          </div>
+                        ) : activeResourceTeam ? (
+                          <div className="resource-detail-shell">
+                            <div className="resource-detail-hero">
+                              <div className="resource-detail-identity">
+                                <span
+                                  className="resource-swatch resource-detail-icon"
+                                  style={{ background: activeResourceTeam.color }}
+                                  aria-hidden="true"
+                                ></span>
+                                <div className="resource-detail-copy-block">
+                                  <p className="caps">团队档案</p>
+                                  <h4>{activeResourceTeam.name}</h4>
+                                  <p className="resource-section-copy">
+                                    聚焦团队负责人、成员规模与关联项目，把组织关系和排期责任放在同一页里管理。
+                                  </p>
+                                  <div className="resource-meta-list">
+                                    <span className="resource-count-badge">
+                                      {activeResourceTeam.lead === '待设置'
+                                        ? '待设置负责人'
+                                        : `负责人 ${activeResourceTeam.lead}`}
+                                    </span>
+                                    <span className="resource-meta-pill">
+                                      {teamStats[activeResourceTeam.id]?.memberCount ?? 0} 名成员
+                                    </span>
+                                    <span className="resource-meta-pill">
+                                      {teamStats[activeResourceTeam.id]?.taskCount ?? 0} 个项目
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="resource-detail-actions">
+                                <button
+                                  className="primary-button"
+                                  onClick={() => openMemberCreate(activeResourceTeam.id)}
+                                  type="button"
+                                >
+                                  新增成员
+                                </button>
+                                <button
+                                  className="icon-button"
+                                  onClick={() => openTeamEdit(activeResourceTeam.id)}
+                                  type="button"
+                                >
+                                  编辑团队
+                                </button>
+                                <button
+                                  className="danger-button"
+                                  onClick={() => openTeamDeleteConfirm(activeResourceTeam.id)}
+                                  type="button"
+                                >
+                                  删除团队
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="resource-detail-metrics">
+                              <article className="resource-metric-card">
+                                <span>团队负责人</span>
+                                <strong>{activeResourceTeam.lead}</strong>
+                              </article>
+                              <article className="resource-metric-card">
+                                <span>团队成员</span>
+                                <strong>{activeResourceTeamMembers.length} 名</strong>
+                              </article>
+                              <article className="resource-metric-card">
+                                <span>关联项目</span>
+                                <strong>{activeResourceTeamTasks.length} 个</strong>
+                              </article>
+                            </div>
+
+                            <div className="resource-detail-grid">
+                              <div className="resource-detail-section resource-members-section">
+                                <div className="resource-detail-section-head">
+                                  <h5>团队成员</h5>
+                                  <span className="resource-meta-pill">{activeResourceTeamMembers.length} 名</span>
+                                </div>
+                                {activeResourceTeamMembers.length === 0 ? (
+                                  <div className="resource-inline-empty">当前团队还没有成员，可以先新增成员后再分配项目。</div>
+                                ) : (
+                                  <div className="resource-member-grid">
+                                    {activeResourceTeamMembers.map((member) => (
+                                      <button
+                                        key={member.id}
+                                        type="button"
+                                        className="resource-member-card"
+                                        onClick={() => selectResourceMember(member.id)}
+                                      >
+                                        <span className="resource-avatar resource-member-card-avatar">{member.avatar}</span>
+                                        <span className="resource-member-card-copy">
+                                          <strong>{member.name}</strong>
+                                          <span>{member.role}</span>
+                                          <span>周容量 {member.capacityHours} 小时</span>
+                                        </span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="resource-detail-section resource-projects-section">
+                                <div className="resource-detail-section-head">
+                                  <h5>关联项目</h5>
+                                  <span className="resource-meta-pill">{activeResourceTeamTasks.length} 个</span>
+                                </div>
+                                {activeResourceTeamTasks.length === 0 ? (
+                                  <div className="resource-inline-empty">当前团队还没有关联项目，后续排期会自动显示在这里。</div>
+                                ) : (
+                                  <div className="resource-task-list">
+                                    {activeResourceTeamTasks.map((task) => {
+                                      const priorityMeta = priorityPalette[task.priority]
+                                      return (
+                                        <article key={task.id} className="resource-task-card">
+                                          <div className="resource-task-card-main">
+                                            <strong>{task.title}</strong>
+                                            <p>
+                                              {membersById[task.ownerId]?.name ?? '未分配'} · {formatTaskExecutionRange(task)}
+                                            </p>
+                                          </div>
+                                          <div className="resource-task-card-side">
+                                            <em
+                                              className="priority-pill"
+                                              style={{
+                                                background: priorityMeta.background,
+                                                borderColor: priorityMeta.border,
+                                                color: priorityMeta.text,
+                                              }}
+                                            >
+                                              {task.priority}
+                                            </em>
+                                            <span className="resource-task-status">{task.status}</span>
+                                          </div>
+                                        </article>
+                                      )
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="resource-empty resource-detail-empty">还没有团队，先创建一个团队再开始管理。</div>
+                        )
+                      ) : memberEditor ? (
+                        <div className="resource-editor-shell">
+                          <div className="resource-editor-head">
+                            <div>
+                              <p className="caps">成员编辑</p>
+                              <h4>{memberEditor.mode === 'create' ? '新建成员' : '编辑成员'}</h4>
+                              <p className="resource-section-copy">统一维护成员角色、团队归属和可用产能，减少排期时反复确认。</p>
+                            </div>
+                            <button
+                              className="icon-button resource-form-dismiss"
+                              onClick={() => setMemberEditor(null)}
+                              type="button"
+                            >
+                              关闭编辑
+                            </button>
+                          </div>
+
+                          <div className="resource-editor-preview">
+                            <span className="resource-avatar resource-editor-preview-icon">
+                              {memberEditor.draft.avatar.trim() || buildAvatarLabel(memberEditor.draft.name)}
+                            </span>
+                            <div className="resource-editor-preview-copy">
+                              <strong>{memberEditor.draft.name.trim() || '未命名成员'}</strong>
+                              <span>
+                                {memberEditor.draft.role.trim() || '待设置角色'} ·{' '}
+                                {teamsById[memberEditor.draft.teamId]?.name ?? '未分配团队'}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="editor-grid resource-editor-grid">
+                            <label>
+                              成员姓名
+                              <input
+                                placeholder="例如：周亦"
+                                value={memberEditor.draft.name}
+                                onChange={(event) =>
+                                  setMemberEditor((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          draft: { ...current.draft, name: event.target.value },
+                                        }
+                                      : current,
+                                  )
+                                }
+                              />
+                            </label>
+
+                            <label>
+                              成员角色
+                              <input
+                                placeholder="例如：产品经理"
+                                value={memberEditor.draft.role}
+                                onChange={(event) =>
+                                  setMemberEditor((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          draft: { ...current.draft, role: event.target.value },
+                                        }
+                                      : current,
+                                  )
+                                }
+                              />
+                            </label>
+
+                            <label>
+                              所属团队
+                              <select
+                                value={memberEditor.draft.teamId}
+                                onChange={(event) =>
+                                  setMemberEditor((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          draft: { ...current.draft, teamId: event.target.value },
+                                        }
+                                      : current,
+                                  )
+                                }
+                              >
+                                {workspace.teams.map((team) => (
+                                  <option key={team.id} value={team.id}>
+                                    {team.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+
+                            <label>
+                              头像文字
+                              <input
+                                maxLength={2}
+                                placeholder="2字以内"
+                                value={memberEditor.draft.avatar}
+                                onChange={(event) =>
+                                  setMemberEditor((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          draft: { ...current.draft, avatar: event.target.value },
+                                        }
+                                      : current,
+                                  )
+                                }
+                              />
+                            </label>
+
+                            <label>
+                              周容量（小时）
+                              <input
+                                type="number"
+                                min={1}
+                                value={memberEditor.draft.capacityHours}
+                                onChange={(event) =>
+                                  setMemberEditor((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          draft: {
+                                            ...current.draft,
+                                            capacityHours: Number(event.target.value),
+                                          },
+                                        }
+                                      : current,
+                                  )
+                                }
+                              />
+                            </label>
+                          </div>
+
+                          <div className="dialog-actions">
+                            <button className="ghost-button" onClick={() => setMemberEditor(null)} type="button">
+                              取消编辑
+                            </button>
+                            <button className="primary-button" onClick={saveMemberEditor} type="button">
+                              保存成员
+                            </button>
+                          </div>
+                        </div>
+                      ) : activeResourceMember ? (
+                        <div className="resource-detail-shell">
+                          <div className="resource-detail-hero">
+                            <div className="resource-detail-identity">
+                              <span className="resource-avatar resource-detail-icon">
+                                {activeResourceMember.avatar}
+                              </span>
+                              <div className="resource-detail-copy-block">
+                                <p className="caps">成员档案</p>
+                                <h4>{activeResourceMember.name}</h4>
+                                <p className="resource-section-copy">
+                                  把角色、团队归属和项目责任放到同一工作台里，成员管理比弹窗更直观也更容易扩展。
+                                </p>
+                                <div className="resource-meta-list">
+                                  <span className="resource-count-badge">{activeResourceMember.role}</span>
+                                  <span className="resource-meta-pill">
+                                    {activeResourceMemberTeam?.name ?? '未分配团队'}
+                                  </span>
+                                  <span className="resource-meta-pill">
+                                    周容量 {activeResourceMember.capacityHours} 小时
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="resource-detail-actions">
+                              <button
+                                className="icon-button"
+                                onClick={() => openMemberEdit(activeResourceMember.id)}
+                                type="button"
+                              >
+                                编辑成员
+                              </button>
+                              <button
+                                className="danger-button"
+                                onClick={() => openMemberDeleteConfirm(activeResourceMember.id)}
+                                type="button"
+                              >
+                                删除成员
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="resource-detail-metrics">
+                            <article className="resource-metric-card">
+                              <span>所属团队</span>
+                              <strong>{activeResourceMemberTeam?.name ?? '未分配'}</strong>
+                            </article>
+                            <article className="resource-metric-card">
+                              <span>周容量</span>
+                              <strong>{activeResourceMember.capacityHours} 小时</strong>
+                            </article>
+                            <article className="resource-metric-card">
+                              <span>负责项目</span>
+                              <strong>{activeResourceMemberTasks.length} 个</strong>
+                            </article>
+                          </div>
+
+                          <div className="resource-detail-grid">
+                            <div className="resource-detail-section">
+                              <div className="resource-detail-section-head">
+                                <h5>所属团队</h5>
+                                <span className="resource-meta-pill">
+                                  {activeResourceMemberTeam?.lead ?? '待设置负责人'}
+                                </span>
+                              </div>
+                              {activeResourceMemberTeam ? (
+                                <button
+                                  type="button"
+                                  className="resource-linked-team-card"
+                                  onClick={() => selectResourceTeam(activeResourceMemberTeam.id)}
+                                >
+                                  <span
+                                    className="resource-swatch resource-linked-team-icon"
+                                    style={{ background: activeResourceMemberTeam.color }}
+                                    aria-hidden="true"
+                                  ></span>
+                                  <span className="resource-linked-team-copy">
+                                    <strong>{activeResourceMemberTeam.name}</strong>
+                                    <span>
+                                      {activeResourceMemberTeam.lead === '待设置'
+                                        ? '待设置负责人'
+                                        : `负责人 ${activeResourceMemberTeam.lead}`}
+                                    </span>
+                                  </span>
+                                </button>
+                              ) : (
+                                <div className="resource-inline-empty">当前成员还没有绑定团队。</div>
+                              )}
+                            </div>
+
+                            <div className="resource-detail-section resource-projects-section">
+                              <div className="resource-detail-section-head">
+                                <h5>负责项目</h5>
+                                <span className="resource-meta-pill">{activeResourceMemberTasks.length} 个</span>
+                              </div>
+                              {activeResourceMemberTasks.length === 0 ? (
+                                <div className="resource-inline-empty">当前成员还没有负责项目，后续分配后会自动显示在这里。</div>
+                              ) : (
+                                <div className="resource-task-list">
+                                  {activeResourceMemberTasks.map((task) => {
+                                    const priorityMeta = priorityPalette[task.priority]
+                                    return (
+                                      <article key={task.id} className="resource-task-card">
+                                        <div className="resource-task-card-main">
+                                          <strong>{task.title}</strong>
+                                          <p>
+                                            {formatTaskExecutionRange(task)} · {task.milestone}
+                                          </p>
+                                        </div>
+                                        <div className="resource-task-card-side">
+                                          <em
+                                            className="priority-pill"
+                                            style={{
+                                              background: priorityMeta.background,
+                                              borderColor: priorityMeta.border,
+                                              color: priorityMeta.text,
+                                            }}
+                                          >
+                                            {task.priority}
+                                          </em>
+                                          <span className="resource-task-status">{task.status}</span>
+                                        </div>
+                                      </article>
+                                    )
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="resource-empty resource-detail-empty">还没有成员，先创建成员再开始分配项目。</div>
+                      )}
+                    </section>
+                  </div>
+                </section>
+              </section>
+            ) : isOverviewPage ? (
               <section className="overview-page">
                 <header className="topbar overview-topbar">
                   <div className="topbar-main">
-                    <p className="caps">总览看板</p>
                     <h2>团队资源与项目总览</h2>
                   </div>
 
@@ -2768,7 +3753,6 @@ function App() {
                   <div className="gantt-card overview-card">
                     <div className="card-header overview-card-header">
                       <div>
-                        <p className="caps">总览列表</p>
                         <h3>项目清单与筛选结果</h3>
                       </div>
                     </div>
@@ -2948,8 +3932,71 @@ function App() {
                       ) : null}
                     </div>
 
+                    <div className="overview-meta-bar overview-selection-bar">
+                      <div className="overview-selection-copy">
+                        <strong className="overview-selection-count">
+                          已选 {overviewSelectedTaskIds.length} 项
+                        </strong>
+                        <span className="overview-selection-hint">
+                          当前筛选 {overviewTasks.length} 项，本页 {overviewVisibleTasks.length} 项
+                        </span>
+                      </div>
+
+                      <div className="overview-selection-actions">
+                        <button
+                          className="ghost-button overview-selection-button"
+                          onClick={toggleOverviewVisibleTaskSelection}
+                          disabled={overviewVisibleTasks.length === 0}
+                          type="button"
+                        >
+                          {isAllOverviewVisibleTasksSelected ? '取消本页' : '本页全选'}
+                        </button>
+                        <button
+                          className="ghost-button overview-selection-button"
+                          onClick={selectAllOverviewTasks}
+                          disabled={overviewTasks.length === 0 || isAllOverviewTasksSelected}
+                          type="button"
+                        >
+                          {isAllOverviewTasksSelected ? '已全选筛选结果' : '全选筛选结果'}
+                        </button>
+                        <button
+                          className="ghost-button overview-selection-button"
+                          onClick={clearOverviewTaskSelection}
+                          disabled={overviewSelectedTaskIds.length === 0}
+                          type="button"
+                        >
+                          清空选择
+                        </button>
+                        <button
+                          className="danger-button overview-selection-button overview-batch-delete"
+                          onClick={openBulkDeleteConfirm}
+                          disabled={overviewSelectedTaskIds.length === 0}
+                          type="button"
+                        >
+                          批量删除
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="project-table overview-table">
                       <div className="table-head">
+                        <span className="table-head-select">
+                          <input
+                            ref={(element) => {
+                              if (element) {
+                                element.indeterminate = isSomeOverviewVisibleTasksSelected
+                              }
+                            }}
+                            aria-label={
+                              isAllOverviewVisibleTasksSelected ? '取消当前页项目选择' : '选择当前页项目'
+                            }
+                            checked={isAllOverviewVisibleTasksSelected}
+                            className="table-row-checkbox"
+                            disabled={overviewVisibleTasks.length === 0}
+                            onChange={toggleOverviewVisibleTaskSelection}
+                            type="checkbox"
+                          />
+                        </span>
                         <span className="table-head-project">项目</span>
                         <span className="table-head-owner">负责人</span>
                         <span className="table-head-status">状态</span>
@@ -2957,67 +4004,101 @@ function App() {
                         <span className="table-head-period">项目执行周期</span>
                         <span className="table-head-milestone">里程碑</span>
                       </div>
-                      {overviewTasks.length === 0 ? (
-                        <div className="table-empty">没有找到符合筛选条件的项目。</div>
-                      ) : (
-                        overviewVisibleTasks.map((task) => {
-                          const priorityMeta = priorityPalette[task.priority]
-                          const ownerName = membersById[task.ownerId]?.name ?? '-'
-                          const executionRange = formatTaskExecutionRange(task)
-                          const executionDuration = `持续 ${Math.max(task.duration, 1)} 天`
-                          return (
-                            <button
-                              key={task.id}
-                              className={task.id === overviewSelectedTaskId ? 'table-row is-selected' : 'table-row'}
-                              onClick={() => handleSelectTask(task.id)}
-                              onContextMenu={(event) => openContextMenu(event, task.id)}
-                            >
-                              <span className="table-cell" title={task.title} data-tooltip={task.title}>
-                                <span className="truncate-text">{task.title}</span>
-                              </span>
-                              <span
-                                className="table-cell table-cell-start"
-                                title={ownerName}
-                                data-tooltip={ownerName}
+                      <div className="overview-table-body">
+                        {overviewTasks.length === 0 ? (
+                          <div className="table-empty">没有找到符合筛选条件的项目。</div>
+                        ) : (
+                          overviewVisibleTasks.map((task) => {
+                            const priorityMeta = priorityPalette[task.priority]
+                            const ownerName = membersById[task.ownerId]?.name ?? '-'
+                            const executionRange = formatTaskExecutionRange(task)
+                            const executionDuration = `持续 ${Math.max(task.duration, 1)} 天`
+                            const isOverviewTaskChecked = overviewSelectedTaskSet.has(task.id)
+                            return (
+                              <div
+                                key={task.id}
+                                className={[
+                                  'table-row',
+                                  task.id === overviewSelectedTaskId ? 'is-selected' : '',
+                                  isOverviewTaskChecked ? 'is-checked' : '',
+                                ]
+                                  .filter(Boolean)
+                                  .join(' ')}
+                                onClick={() => handleSelectTask(task.id)}
+                                onContextMenu={(event) => openContextMenu(event, task.id)}
+                                onKeyDown={(event) => {
+                                  if (event.target !== event.currentTarget) {
+                                    return
+                                  }
+
+                                  if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault()
+                                    handleSelectTask(task.id)
+                                  }
+                                }}
+                                role="button"
+                                tabIndex={0}
                               >
-                                <span className="truncate-text">{ownerName}</span>
-                              </span>
-                              <span className="table-cell table-cell-start">
-                                <span>{task.status}</span>
-                              </span>
-                              <span className="table-cell table-cell-start">
-                                <em
-                                  className="priority-pill"
-                                  style={{
-                                    background: priorityMeta.background,
-                                    borderColor: priorityMeta.border,
-                                    color: priorityMeta.text,
-                                  }}
-                                >
-                                  {task.priority}
-                                </em>
-                              </span>
-                              <span
-                                className="table-cell table-cell-start"
-                                title={`${executionRange} · ${executionDuration}`}
-                                data-tooltip={`${executionRange} · ${executionDuration}`}
-                              >
-                                <span className="table-period-stack">
-                                  <strong>{executionRange}</strong>
-                                  <small>{executionDuration}</small>
+                                <span className="table-cell table-cell-select" onClick={(event) => event.stopPropagation()}>
+                                  <input
+                                    aria-label={`选择项目 ${task.title}`}
+                                    checked={isOverviewTaskChecked}
+                                    className="table-row-checkbox"
+                                    onChange={() => toggleOverviewTaskSelection(task.id)}
+                                    type="checkbox"
+                                  />
                                 </span>
-                              </span>
-                              <span
-                                className="table-cell table-cell-end"
-                                title={task.milestone}
-                                data-tooltip={task.milestone}
-                              >
-                                <span className="truncate-text">{task.milestone}</span>
-                              </span>
-                            </button>
-                          )
-                        })
-                      )}
+                                <span
+                                  className="table-cell table-cell-project"
+                                  title={task.title}
+                                  data-tooltip={task.title}
+                                >
+                                  <span className="truncate-text">{task.title}</span>
+                                </span>
+                                <span
+                                  className="table-cell table-cell-start"
+                                  title={ownerName}
+                                  data-tooltip={ownerName}
+                                >
+                                  <span className="truncate-text">{ownerName}</span>
+                                </span>
+                                <span className="table-cell table-cell-start">
+                                  <span>{task.status}</span>
+                                </span>
+                                <span className="table-cell table-cell-start">
+                                  <em
+                                    className="priority-pill"
+                                    style={{
+                                      background: priorityMeta.background,
+                                      borderColor: priorityMeta.border,
+                                      color: priorityMeta.text,
+                                    }}
+                                  >
+                                    {task.priority}
+                                  </em>
+                                </span>
+                                <span
+                                  className="table-cell table-cell-start"
+                                  title={`${executionRange} · ${executionDuration}`}
+                                  data-tooltip={`${executionRange} · ${executionDuration}`}
+                                >
+                                  <span className="table-period-stack">
+                                    <strong>{executionRange}</strong>
+                                    <small>{executionDuration}</small>
+                                  </span>
+                                </span>
+                                <span
+                                  className="table-cell table-cell-milestone"
+                                  title={task.milestone}
+                                  data-tooltip={task.milestone}
+                                >
+                                  <span className="truncate-text">{task.milestone}</span>
+                                </span>
+                              </div>
+                            )
+                          })
+                        )}
+                      </div>
                       {overviewTotalPages > 1 ? (
                         <div className="table-footer">
                           <div className="table-pagination">
@@ -3120,13 +4201,13 @@ function App() {
                               setTimelineFilterMenu((current) => (current === 'holiday' ? null : 'holiday'))
                             }
                           >
-                            <span>中国法定节假日</span>
+                            <span>节假日与调休</span>
                             <strong>{isHolidayHighlightEnabled ? '已标记' : '查看'}</strong>
                           </button>
                           {timelineFilterMenu === 'holiday' ? (
                             <div className="overview-filter-popover timeline-filter-popover timeline-holiday-popover">
                               <div className="overview-filter-popover-head">
-                                <span>2026 年法定节假日</span>
+                                <span>2026 年法定节假日与调休安排</span>
                                 <button
                                   type="button"
                                   onClick={() => setIsHolidayHighlightEnabled((current) => !current)}
@@ -3135,11 +4216,20 @@ function App() {
                                 </button>
                               </div>
                               <div className="timeline-holiday-list">
-                                {CHINA_LEGAL_HOLIDAY_PERIODS_2026.map((holiday) => (
-                                  <div key={holiday.id} className="timeline-holiday-item">
-                                    <strong>{holiday.name}</strong>
+                                {CHINA_OFFICIAL_HOLIDAY_CALENDAR_2026.map((holiday) => (
+                                  <div
+                                    key={holiday.id}
+                                    className={`timeline-holiday-item ${holiday.kind === 'makeup-workday' ? 'is-workday' : 'is-holiday'}`}
+                                  >
+                                    <div className="timeline-holiday-item-head">
+                                      <strong>{holiday.name}</strong>
+                                      <em>{holiday.kind === 'makeup-workday' ? '班' : '休'}</em>
+                                    </div>
                                     <span>
-                                      {holiday.start.replaceAll('-', '.')} - {holiday.end.replaceAll('-', '.')}
+                                      {holiday.start === holiday.end
+                                        ? holiday.start.replaceAll('-', '.')
+                                        : `${holiday.start.replaceAll('-', '.')} - ${holiday.end.replaceAll('-', '.')}`}
+                                      {holiday.kind === 'makeup-workday' ? ' 调休上班' : ' 放假'}
                                     </span>
                                   </div>
                                 ))}
@@ -3253,11 +4343,12 @@ function App() {
                             <span
                               key={day.key}
                               data-day-key={day.key}
-                              title={day.holidayLabel ?? undefined}
+                              title={day.specialDayLabel ?? undefined}
                               className={[
                                 'date-cell',
                                 day.isFocused ? 'is-focused' : '',
                                 day.isHoliday ? 'is-holiday' : '',
+                                day.isMakeupWorkday ? 'is-makeup-workday' : '',
                                 day.isWeekend ? 'is-weekend' : '',
                                 day.isToday ? 'is-today' : '',
                                 day.isOutsideVisibleMonth ? 'is-outside-month' : '',
@@ -3268,7 +4359,8 @@ function App() {
                             >
                               <strong>{day.dayLabel}</strong>
                               <small>{day.weekdayLabel}</small>
-                              {day.isHoliday ? <em className="date-holiday-tag">休</em> : null}
+                              {day.isHoliday ? <em className="date-day-tag is-holiday">休</em> : null}
+                              {day.isMakeupWorkday ? <em className="date-day-tag is-workday">班</em> : null}
                             </span>
                           ))}
                         </div>
@@ -3461,354 +4553,6 @@ function App() {
           <button className="danger" onClick={() => openDeleteConfirm(contextMenu.taskId)}>
             删除项目
           </button>
-        </div>
-      ) : null}
-
-      {isResourceModalOpen ? (
-        <div className="overlay" onClick={closeResourceModal}>
-          <div className="dialog resource-dialog" onClick={(event) => event.stopPropagation()}>
-            <div className="dialog-header">
-              <div>
-                <p className="caps">组织管理</p>
-                <h3>团队与成员</h3>
-              </div>
-              <button className="circle-close-button" aria-label="关闭组织管理" onClick={closeResourceModal}>
-                <span aria-hidden="true">×</span>
-              </button>
-            </div>
-
-            <p className="detail-copy resource-copy">
-              统一维护团队分组和成员档案，删除前会自动校验关联关系，避免误删影响排期。
-            </p>
-
-            <div className="resource-summary-strip">
-              <span className="resource-summary-chip">团队 {workspace.teams.length}</span>
-              <span className="resource-summary-chip">成员 {workspace.members.length}</span>
-            </div>
-
-            {resourceNotice ? (
-              <div
-                className={
-                  resourceNotice.tone === 'danger'
-                    ? 'resource-notice is-danger'
-                    : 'resource-notice is-success'
-                }
-              >
-                {resourceNotice.message}
-              </div>
-            ) : null}
-
-            <div className="resource-grid">
-              <section className="resource-section">
-                <div className="resource-section-head">
-                  <div>
-                    <p className="caps">团队管理</p>
-                    <div className="resource-section-title-row">
-                      <h4>团队列表</h4>
-                      <span className="resource-count-badge">{workspace.teams.length} 个团队</span>
-                    </div>
-                    <p className="resource-section-copy">管理团队名称、负责人和主题色，保证排期归属清晰。</p>
-                  </div>
-                  <button className="ghost-button resource-add-button" onClick={openTeamCreate}>
-                    新增团队
-                  </button>
-                </div>
-
-                {teamEditor ? (
-                  <div className="resource-form-card">
-                    <div className="resource-form-head">
-                      <div className="resource-form-title">
-                        <strong>{teamEditor.mode === 'create' ? '新建团队' : '编辑团队'}</strong>
-                        <span>补全团队基础信息后保存到组织列表。</span>
-                      </div>
-                      <button className="icon-button resource-form-dismiss" onClick={() => setTeamEditor(null)}>
-                        收起
-                      </button>
-                    </div>
-
-                    <div className="editor-grid resource-editor-grid">
-                      <label>
-                        团队名称
-                        <input
-                          placeholder="例如：体验设计组"
-                          value={teamEditor.draft.name}
-                          onChange={(event) =>
-                            setTeamEditor((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    draft: { ...current.draft, name: event.target.value },
-                                  }
-                                : current,
-                            )
-                          }
-                        />
-                      </label>
-
-                      <label>
-                        团队负责人
-                        <input
-                          placeholder="填写负责人姓名"
-                          value={teamEditor.draft.lead}
-                          onChange={(event) =>
-                            setTeamEditor((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    draft: { ...current.draft, lead: event.target.value },
-                                  }
-                                : current,
-                            )
-                          }
-                        />
-                      </label>
-
-                      <label className="resource-color-field">
-                        主题色
-                        <input
-                          type="color"
-                          value={teamEditor.draft.color}
-                          onChange={(event) =>
-                            setTeamEditor((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    draft: { ...current.draft, color: event.target.value },
-                                  }
-                                : current,
-                            )
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    <div className="dialog-actions">
-                      <button className="primary-button" onClick={saveTeamEditor}>
-                        保存团队
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="resource-list">
-                  {workspace.teams.length === 0 ? (
-                    <div className="resource-empty">还没有团队，先创建一个团队再安排成员与项目。</div>
-                  ) : (
-                    workspace.teams.map((team) => (
-                      <article key={team.id} className="resource-row">
-                        <div className="resource-row-main">
-                          <span
-                            className="resource-swatch"
-                            style={{ background: team.color }}
-                            aria-hidden="true"
-                          ></span>
-                          <div>
-                            <strong>{team.name}</strong>
-                            <p className="resource-row-subtitle">负责人 {team.lead}</p>
-                            <div className="resource-meta-list">
-                              <span className="resource-meta-pill">
-                                {teamStats[team.id]?.memberCount ?? 0} 名成员
-                              </span>
-                              <span className="resource-meta-pill">
-                                {teamStats[team.id]?.taskCount ?? 0} 个项目
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="resource-row-actions">
-                          <button className="icon-button" onClick={() => openTeamEdit(team.id)}>
-                            编辑
-                          </button>
-                          <button
-                            className="danger-button"
-                            onClick={() => openTeamDeleteConfirm(team.id)}
-                          >
-                            删除
-                          </button>
-                        </div>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </section>
-
-              <section className="resource-section">
-                <div className="resource-section-head">
-                  <div>
-                    <p className="caps">成员管理</p>
-                    <div className="resource-section-title-row">
-                      <h4>成员列表</h4>
-                      <span className="resource-count-badge">{workspace.members.length} 名成员</span>
-                    </div>
-                    <p className="resource-section-copy">维护角色、归属团队和产能，保证资源分配真实可用。</p>
-                  </div>
-                  <button className="ghost-button resource-add-button" onClick={openMemberCreate}>
-                    新增成员
-                  </button>
-                </div>
-
-                {memberEditor ? (
-                  <div className="resource-form-card">
-                    <div className="resource-form-head">
-                      <div className="resource-form-title">
-                        <strong>{memberEditor.mode === 'create' ? '新建成员' : '编辑成员'}</strong>
-                        <span>维护成员角色、团队归属和可用产能。</span>
-                      </div>
-                      <button className="icon-button resource-form-dismiss" onClick={() => setMemberEditor(null)}>
-                        收起
-                      </button>
-                    </div>
-
-                    <div className="editor-grid resource-editor-grid">
-                      <label>
-                        成员姓名
-                        <input
-                          placeholder="例如：周亦"
-                          value={memberEditor.draft.name}
-                          onChange={(event) =>
-                            setMemberEditor((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    draft: { ...current.draft, name: event.target.value },
-                                  }
-                                : current,
-                            )
-                          }
-                        />
-                      </label>
-
-                      <label>
-                        成员角色
-                        <input
-                          placeholder="例如：产品经理"
-                          value={memberEditor.draft.role}
-                          onChange={(event) =>
-                            setMemberEditor((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    draft: { ...current.draft, role: event.target.value },
-                                  }
-                                : current,
-                            )
-                          }
-                        />
-                      </label>
-
-                      <label>
-                        所属团队
-                        <select
-                          value={memberEditor.draft.teamId}
-                          onChange={(event) =>
-                            setMemberEditor((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    draft: { ...current.draft, teamId: event.target.value },
-                                  }
-                                : current,
-                            )
-                          }
-                        >
-                          {workspace.teams.map((team) => (
-                            <option key={team.id} value={team.id}>
-                              {team.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-
-                      <label>
-                        头像文字
-                        <input
-                          maxLength={2}
-                          placeholder="2字以内"
-                          value={memberEditor.draft.avatar}
-                          onChange={(event) =>
-                            setMemberEditor((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    draft: { ...current.draft, avatar: event.target.value },
-                                  }
-                                : current,
-                            )
-                          }
-                        />
-                      </label>
-
-                      <label>
-                        周容量（小时）
-                        <input
-                          type="number"
-                          min={1}
-                          value={memberEditor.draft.capacityHours}
-                          onChange={(event) =>
-                            setMemberEditor((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    draft: {
-                                      ...current.draft,
-                                      capacityHours: Number(event.target.value),
-                                    },
-                                  }
-                                : current,
-                            )
-                          }
-                        />
-                      </label>
-                    </div>
-
-                    <div className="dialog-actions">
-                      <button className="primary-button" onClick={saveMemberEditor}>
-                        保存成员
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-
-                <div className="resource-list">
-                  {workspace.members.length === 0 ? (
-                    <div className="resource-empty">还没有成员，创建成员后才能在时间线上分配项目。</div>
-                  ) : (
-                    workspace.members.map((member) => (
-                      <article key={member.id} className="resource-row">
-                        <div className="resource-row-main">
-                          <span className="resource-avatar">{member.avatar}</span>
-                          <div>
-                            <strong>{member.name}</strong>
-                            <p className="resource-row-subtitle">{member.role}</p>
-                            <div className="resource-meta-list">
-                              <span className="resource-meta-pill">
-                                {teamsById[member.teamId]?.name ?? '未分配团队'}
-                              </span>
-                              <span className="resource-meta-pill">周容量 {member.capacityHours} 小时</span>
-                              <span className="resource-meta-pill">
-                                负责 {memberTaskCounts[member.id] ?? 0} 个项目
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="resource-row-actions">
-                          <button className="icon-button" onClick={() => openMemberEdit(member.id)}>
-                            编辑
-                          </button>
-                          <button
-                            className="danger-button"
-                            onClick={() => openMemberDeleteConfirm(member.id)}
-                          >
-                            删除
-                          </button>
-                        </div>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </section>
-            </div>
-          </div>
         </div>
       ) : null}
 
@@ -4071,20 +4815,22 @@ function App() {
         </div>
       ) : null}
 
-      {deleteTargetId ? (
-        <div className="overlay" onClick={() => setDeleteTargetId(null)}>
+      {deleteConfirmCount > 0 ? (
+        <div className="overlay" onClick={closeDeleteConfirm}>
           <div className="dialog confirm-dialog" onClick={(event) => event.stopPropagation()}>
             <div className="dialog-header">
               <div>
                 <p className="caps">删除确认</p>
-                <h3>确定删除这个项目吗？</h3>
+                <h3>{isBulkDeleteConfirm ? `确定批量删除 ${deleteConfirmCount} 个项目吗？` : '确定删除这个项目吗？'}</h3>
               </div>
             </div>
             <p className="detail-copy">
-              删除后会立即从当前工作区移除，并写入操作记录。这一步不可撤销。
+              {isBulkDeleteConfirm
+                ? `删除后会立即从当前工作区移除所选项目，并写入一条批量删除记录。${deleteConfirmPreview ? ` 本次将删除：${deleteConfirmPreview}${deleteConfirmCount > 3 ? ' 等项目。' : '。'}` : ''}`
+                : '删除后会立即从当前工作区移除，并写入操作记录。这一步不可撤销。'}
             </p>
             <div className="dialog-actions">
-              <button className="ghost-button" onClick={() => setDeleteTargetId(null)}>
+              <button className="ghost-button" onClick={closeDeleteConfirm}>
                 取消
               </button>
               <button className="danger-button" onClick={handleDeleteTask}>
