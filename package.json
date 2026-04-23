@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "docker:up": "bash scripts/docker-up.sh",
+    "docker:down": "bash scripts/docker-down.sh",
+    "docker:smoke": "bash scripts/docker-smoke.sh"
   },
   "dependencies": {
     "react": "^19.2.4",

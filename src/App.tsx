@@ -1,6 +1,7 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react'
 import {
   startTransition,
+  useCallback,
   useDeferredValue,
   useEffect,
   useEffectEvent,
@@ -8,6 +9,27 @@ import {
   useRef,
   useState,
 } from 'react'
+import {
+  createMember as createMemberRequest,
+  createTask as createTaskRequest,
+  createTeam as createTeamRequest,
+  createViewOperationRecord,
+  deleteMember as deleteMemberRequest,
+  deleteTask as deleteTaskRequest,
+  deleteTeam as deleteTeamRequest,
+  exportWorkspaceSnapshot,
+  fetchBootstrap,
+  fetchOperationRecords,
+  fetchReleaseRecords,
+  type ApiMember,
+  type ApiOperationRecord,
+  type ApiReleaseRecord,
+  type ApiTask,
+  type ApiTeam,
+  updateMember as updateMemberRequest,
+  updateTask as updateTaskRequest,
+  updateTeam as updateTeamRequest,
+} from './api'
 import './App.css'
 
 type Status = '计划中' | '进行中' | '风险' | '已完成'
@@ -18,6 +40,7 @@ type Team = {
   name: string
   lead: string
   color: string
+  sortOrder: number
 }
 
 type Member = {
@@ -27,6 +50,7 @@ type Member = {
   teamId: string
   avatar: string
   capacityHours: number
+  sortOrder: number
 }
 
 type Task = {
@@ -39,6 +63,7 @@ type Task = {
   priority: Priority
   startOffset: number
   duration: number
+  sortOrder: number
   color: string
   summary: string
   milestone: string
@@ -61,33 +86,12 @@ type OperationRecord = {
   detail: string
 }
 
-type LegacyActivity = {
-  id: string
-  title: string
-  detail: string
-  time: string
-}
-
-type AccountRole = 'admin' | 'user'
-
-type UserAccount = {
-  id: string
-  username: string
-  password: string
-  displayName: string
-  role: AccountRole
-  department: string
-  group: string
-  createdAt: string
-}
-
 type Workspace = {
   teams: Team[]
   members: Member[]
   tasks: Task[]
   updateRecords: ReleaseRecord[]
   operationRecords: OperationRecord[]
-  accounts: UserAccount[]
 }
 
 type TaskDraft = Pick<
@@ -240,13 +244,18 @@ type OverviewFilterMenu = 'owner' | 'status' | 'priority' | 'duration' | null
 type TimelineFilterMenu = 'member' | 'holiday' | null
 
 const STORAGE_KEY = 'human-gantt-workbench:v4'
-const BASE_DATE = new Date('2026-04-21T00:00:00+08:00')
+const BASE_DATE = new Date()
 const TIMELINE_WINDOW_DAYS = 14
 const TIMELINE_WINDOW_STEP_DAYS = 7
 const OVERVIEW_PAGE_SIZE = 10
 const RECORD_PAGE_SIZE = 10
 const priorityOrder: Priority[] = ['P0', 'P1', 'P2', 'P3', 'P4', 'P5']
 const CURRENT_OPERATOR = '当前用户'
+
+type RecordCollectionState<T> = {
+  items: T[]
+  total: number
+}
 
 const CHINA_OFFICIAL_HOLIDAY_CALENDAR_2026: HolidayCalendarPeriod[] = [
   { id: 'yuan-dan', name: '元旦', start: '2026-01-01', end: '2026-01-03', kind: 'holiday' },
@@ -449,9 +458,9 @@ const priorityPalette: Record<
 
 const defaultWorkspace: Workspace = {
   teams: [
-    { id: 'strategy', name: '产品策略组', lead: '林青', color: '#5568ff' },
-    { id: 'design', name: '体验设计组', lead: '周亦', color: '#22c55e' },
-    { id: 'delivery', name: '前端交付组', lead: '许衡', color: '#06b6d4' },
+    { id: 'strategy', name: '产品策略组', lead: '林青', color: '#5568ff', sortOrder: 0 },
+    { id: 'design', name: '体验设计组', lead: '周亦', color: '#22c55e', sortOrder: 1 },
+    { id: 'delivery', name: '前端交付组', lead: '许衡', color: '#06b6d4', sortOrder: 2 },
   ],
   members: [
     {
@@ -461,6 +470,7 @@ const defaultWorkspace: Workspace = {
       teamId: 'strategy',
       avatar: '林',
       capacityHours: 40,
+      sortOrder: 0,
     },
     {
       id: 'mina',
@@ -469,6 +479,7 @@ const defaultWorkspace: Workspace = {
       teamId: 'strategy',
       avatar: '米',
       capacityHours: 36,
+      sortOrder: 1,
     },
     {
       id: 'zhouyi',
@@ -477,6 +488,7 @@ const defaultWorkspace: Workspace = {
       teamId: 'design',
       avatar: '周',
       capacityHours: 40,
+      sortOrder: 2,
     },
     {
       id: 'xuheng',
@@ -485,6 +497,7 @@ const defaultWorkspace: Workspace = {
       teamId: 'delivery',
       avatar: '许',
       capacityHours: 44,
+      sortOrder: 3,
     },
   ],
   tasks: [
@@ -498,6 +511,7 @@ const defaultWorkspace: Workspace = {
       priority: 'P0',
       startOffset: 0,
       duration: 4,
+      sortOrder: 0,
       color: '#ef4444',
       summary:
         '统一桌面端与移动浏览器信息架构，确保一屏内完成资源分配、进度查看和风险识别。',
@@ -514,6 +528,7 @@ const defaultWorkspace: Workspace = {
       priority: 'P1',
       startOffset: 5,
       duration: 3,
+      sortOrder: 1,
       color: '#f97316',
       summary:
         '需要补齐导出模板和风险清单，当前最大阻塞是客户评审时间和素材确认。',
@@ -530,6 +545,7 @@ const defaultWorkspace: Workspace = {
       priority: 'P2',
       startOffset: 1,
       duration: 5,
+      sortOrder: 2,
       color: '#f59e0b',
       summary:
         '对齐 Figma gantt dashboard 的版式关系，并将核心文案、状态和操作全部本地化。',
@@ -546,6 +562,7 @@ const defaultWorkspace: Workspace = {
       priority: 'P1',
       startOffset: 2,
       duration: 6,
+      sortOrder: 3,
       color: '#f97316',
       summary:
         '补齐搜索、筛选、时间调整、详情编辑和本地持久化，形成真正可演示的 MVP。',
@@ -562,6 +579,7 @@ const defaultWorkspace: Workspace = {
       priority: 'P5',
       startOffset: 7,
       duration: 2,
+      sortOrder: 4,
       color: '#64748b',
       summary: 'JSON、打印视图与 Docker 部署链路已经跑通。',
       milestone: '已完成',
@@ -577,6 +595,7 @@ const defaultWorkspace: Workspace = {
       priority: 'P3',
       startOffset: 6,
       duration: 2,
+      sortOrder: 5,
       color: '#0ea5e9',
       summary: '为 PMO 增加风险摘要和里程碑播报，方便每周例会快速汇报。',
       milestone: '5 月 3 日上线',
@@ -585,77 +604,10 @@ const defaultWorkspace: Workspace = {
   ],
   updateRecords: SEEDED_UPDATE_RECORDS,
   operationRecords: SEEDED_OPERATION_RECORDS,
-  accounts: [],
 }
 
 function cloneDefaultWorkspace() {
   return JSON.parse(JSON.stringify(defaultWorkspace)) as Workspace
-}
-
-function isReleaseRecord(value: unknown): value is ReleaseRecord {
-  if (!value || typeof value !== 'object') {
-    return false
-  }
-
-  const record = value as Partial<ReleaseRecord>
-  return (
-    typeof record.id === 'string' &&
-    typeof record.version === 'string' &&
-    typeof record.updatedAt === 'string' &&
-    Array.isArray(record.features) &&
-    record.features.every((feature) => typeof feature === 'string')
-  )
-}
-
-function mergeSeededReleaseRecords(records: unknown, seededRecords: ReleaseRecord[]) {
-  const persistedRecords = Array.isArray(records) ? records.filter(isReleaseRecord) : []
-
-  if (persistedRecords.length === 0) {
-    return seededRecords
-  }
-
-  const seededIds = new Set(seededRecords.map((record) => record.id))
-  const seededVersions = new Set(seededRecords.map((record) => record.version))
-  const customRecords = persistedRecords.filter(
-    (record) => !seededIds.has(record.id) && !seededVersions.has(record.version),
-  )
-
-  return [...seededRecords, ...customRecords]
-}
-
-function normalizeWorkspace(input: unknown) {
-  const fallback = cloneDefaultWorkspace()
-
-  if (!input || typeof input !== 'object') {
-    return fallback
-  }
-
-  const candidate = input as Partial<Workspace> & { activities?: LegacyActivity[] }
-
-  const legacyOperationRecords = Array.isArray(candidate.activities)
-    ? candidate.activities.map((activity, index) => ({
-        id: activity.id || `legacy-operation-${index + 1}`,
-        actor: '历史迁移',
-        time: activity.time || '历史时间未知',
-        action: '历史迁移' as const,
-        target: activity.title || `历史记录 ${index + 1}`,
-        detail: activity.detail || '历史记录已迁移到操作记录。',
-      }))
-    : []
-
-  return {
-    teams: Array.isArray(candidate.teams) ? candidate.teams : fallback.teams,
-    members: Array.isArray(candidate.members) ? candidate.members : fallback.members,
-    tasks: Array.isArray(candidate.tasks) ? candidate.tasks : fallback.tasks,
-    updateRecords: mergeSeededReleaseRecords(candidate.updateRecords, fallback.updateRecords),
-    operationRecords:
-      Array.isArray(candidate.operationRecords) && candidate.operationRecords.length > 0
-        ? candidate.operationRecords
-        : legacyOperationRecords.length > 0
-          ? legacyOperationRecords
-          : fallback.operationRecords,
-    accounts: Array.isArray(candidate.accounts) ? candidate.accounts : fallback.accounts,
-  } satisfies Workspace
 }
 
 function formatTimeLabel() {
@@ -667,7 +619,29 @@ function formatTimeLabel() {
   }).format(new Date())
 }
 
-function formatAuditTimeLabel() {
+function formatTaskUpdatedAtFromApi(value: string) {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+
+  const parsedDate = normalizeDate(parsed)
+  const today = normalizeDate(BASE_DATE)
+  const yesterday = addCalendarDays(today, -1)
+  const timeLabel = new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(parsed)
+
+  if (diffCalendarDays(parsedDate, today) === 0) {
+    return `今天 ${timeLabel}`
+  }
+
+  if (diffCalendarDays(parsedDate, yesterday) === 0) {
+    return `昨天 ${timeLabel}`
+  }
+
   return new Intl.DateTimeFormat('zh-CN', {
     year: 'numeric',
     month: '2-digit',
@@ -675,7 +649,84 @@ function formatAuditTimeLabel() {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
-  }).format(new Date())
+  }).format(parsed)
+}
+
+function formatAuditTimeLabelFromApi(value: string) {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return value
+  }
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(parsed)
+}
+
+function mapApiTeamToTeam(team: ApiTeam): Team {
+  return {
+    id: team.id,
+    name: team.name,
+    lead: team.lead,
+    color: team.color,
+    sortOrder: team.sortOrder,
+  }
+}
+
+function mapApiMemberToMember(member: ApiMember): Member {
+  return {
+    id: member.id,
+    name: member.name,
+    role: member.role,
+    teamId: member.teamId,
+    avatar: member.avatar,
+    capacityHours: member.capacityHours,
+    sortOrder: member.sortOrder,
+  }
+}
+
+function mapApiTaskToTask(task: ApiTask): Task {
+  return {
+    id: task.id,
+    title: task.title,
+    ownerId: task.ownerId,
+    teamId: task.teamId,
+    progress: task.progress,
+    status: task.status as Status,
+    priority: task.priority as Priority,
+    startOffset: diffCalendarDays(parseDateInputValue(task.startDate), normalizeDate(BASE_DATE)),
+    duration: task.duration,
+    sortOrder: task.sortOrder,
+    color: task.color,
+    summary: task.summary,
+    milestone: task.milestone,
+    updatedAt: formatTaskUpdatedAtFromApi(task.updatedAt),
+  }
+}
+
+function mapApiReleaseRecordToReleaseRecord(record: ApiReleaseRecord): ReleaseRecord {
+  return {
+    id: record.id,
+    version: record.version,
+    updatedAt: formatAuditTimeLabelFromApi(record.updatedAt),
+    features: record.features,
+  }
+}
+
+function mapApiOperationRecordToOperationRecord(record: ApiOperationRecord): OperationRecord {
+  return {
+    id: record.id,
+    actor: record.actor,
+    time: formatAuditTimeLabelFromApi(record.time),
+    action: record.action,
+    target: record.target,
+    detail: record.detail,
+  }
 }
 
 function normalizeDate(date: Date) {
@@ -1082,20 +1133,20 @@ function buildAvatarLabel(name: string) {
 }
 
 function App() {
-  const [workspace, setWorkspace] = useState<Workspace>(() => {
-    const stored =
-      typeof window !== 'undefined' ? window.localStorage.getItem(STORAGE_KEY) : null
-
-    if (!stored) {
-      return cloneDefaultWorkspace()
-    }
-
-    try {
-      return normalizeWorkspace(JSON.parse(stored))
-    } catch {
-      return cloneDefaultWorkspace()
-    }
+  const [workspace, setWorkspace] = useState<Workspace>(() => cloneDefaultWorkspace())
+  const [releaseRecordState, setReleaseRecordState] = useState<RecordCollectionState<ReleaseRecord>>({
+    items: SEEDED_UPDATE_RECORDS.slice(0, RECORD_PAGE_SIZE),
+    total: SEEDED_UPDATE_RECORDS.length,
   })
+  const [operationRecordState, setOperationRecordState] = useState<
+    RecordCollectionState<OperationRecord>
+  >({
+    items: SEEDED_OPERATION_RECORDS.slice(0, RECORD_PAGE_SIZE),
+    total: SEEDED_OPERATION_RECORDS.length,
+  })
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null)
+  const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true)
+  const [isExporting, setIsExporting] = useState(false)
   const [activeNav, setActiveNav] = useState<NavSection>('资源排期')
   const [recordView, setRecordView] = useState<RecordView>('更新记录')
   const [recordPage, setRecordPage] = useState(1)
@@ -1156,9 +1207,113 @@ function App() {
   const timelineBrowseRef = useRef<TimelineBrowseState>(null)
   const wheelMonthSwitchRef = useRef({ delta: 0, lastAt: 0 })
 
+  const applyBootstrapPayload = useCallback((payload: Awaited<ReturnType<typeof fetchBootstrap>>) => {
+    setWorkspace((current) => ({
+      ...current,
+      teams: payload.teams
+        .slice()
+        .sort((left, right) => left.sortOrder - right.sortOrder)
+        .map(mapApiTeamToTeam),
+      members: payload.members
+        .slice()
+        .sort((left, right) => left.sortOrder - right.sortOrder)
+        .map(mapApiMemberToMember),
+      tasks: payload.tasks
+        .slice()
+        .sort((left, right) => left.sortOrder - right.sortOrder)
+        .map(mapApiTaskToTask),
+    }))
+    setReleaseRecordState((current) => ({
+      ...current,
+      total: payload.summary.releaseRecordCount,
+    }))
+    setOperationRecordState((current) => ({
+      ...current,
+      total: payload.summary.operationRecordCount,
+    }))
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(STORAGE_KEY)
+    }
+  }, [])
+
+  const refreshWorkspace = useCallback(async () => {
+    try {
+      setWorkspaceError(null)
+      const payload = await fetchBootstrap()
+      applyBootstrapPayload(payload)
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : '工作区数据加载失败。')
+    } finally {
+      setIsWorkspaceLoading(false)
+    }
+  }, [applyBootstrapPayload])
+
+  const refreshRecordPage = async (nextView: RecordView, nextPage: number) => {
+    try {
+      setWorkspaceError(null)
+      if (nextView === '更新记录') {
+        const payload = await fetchReleaseRecords(nextPage, RECORD_PAGE_SIZE)
+        setReleaseRecordState({
+          items: payload.items.map(mapApiReleaseRecordToReleaseRecord),
+          total: payload.total,
+        })
+        return
+      }
+
+      const payload = await fetchOperationRecords(nextPage, RECORD_PAGE_SIZE)
+      setOperationRecordState({
+        items: payload.items.map(mapApiOperationRecordToOperationRecord),
+        total: payload.total,
+      })
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : '记录中心数据加载失败。')
+    }
+  }
+
+  const recordViewAction = async (target: string, detail: string) => {
+    try {
+      await createViewOperationRecord({
+        actor: CURRENT_OPERATOR,
+        target,
+        detail,
+      })
+      await refreshWorkspace()
+      if (activeNav === '记录中心' || target === '记录中心') {
+        await refreshRecordPage('操作记录', recordView === '操作记录' ? recordPage : 1)
+      }
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : '查看记录写入失败。')
+    }
+  }
+
   useEffect(() => {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace))
-  }, [workspace])
+    let cancelled = false
+
+    const loadWorkspace = async () => {
+      try {
+        setWorkspaceError(null)
+        const payload = await fetchBootstrap()
+        if (cancelled) {
+          return
+        }
+        applyBootstrapPayload(payload)
+      } catch (error) {
+        if (!cancelled) {
+          setWorkspaceError(error instanceof Error ? error.message : '工作区数据加载失败。')
+        }
+      } finally {
+        if (!cancelled) {
+          setIsWorkspaceLoading(false)
+        }
+      }
+    }
+
+    void loadWorkspace()
+
+    return () => {
+      cancelled = true
+    }
+  }, [applyBootstrapPayload])
 
   useEffect(() => {
     const closeContextMenu = () => setContextMenu(null)
@@ -1339,24 +1494,6 @@ function App() {
       ),
     [tasksSnapshot, workspace.members],
   )
-
-  useEffect(() => {
-    setSelectedResourceTeamId((current) =>
-      workspace.teams.some((team) => team.id === current) ? current : (workspace.teams[0]?.id ?? ''),
-    )
-  }, [workspace.teams])
-
-  useEffect(() => {
-    setSelectedResourceMemberId((current) =>
-      workspace.members.some((member) => member.id === current)
-        ? current
-        : (workspace.members[0]?.id ?? ''),
-    )
-  }, [workspace.members])
-
-  useEffect(() => {
-    setResourceSearchValue('')
-  }, [resourcePanelTab])
 
   const visibleMonthStart = useMemo(
     () => normalizeDate(timelineStartDate),
@@ -1546,45 +1683,36 @@ function App() {
   }, [effectiveOverviewPage, overviewTasks])
   const recordTotalCount =
     recordView === '更新记录'
-      ? workspace.updateRecords.length
-      : workspace.operationRecords.length
+      ? releaseRecordState.total
+      : operationRecordState.total
   const recordTotalPages = Math.max(1, Math.ceil(recordTotalCount / RECORD_PAGE_SIZE))
   const effectiveRecordPage = Math.min(recordPage, recordTotalPages)
-  const visibleUpdateRecords = useMemo(() => {
-    const startIndex = (effectiveRecordPage - 1) * RECORD_PAGE_SIZE
-    return workspace.updateRecords.slice(startIndex, startIndex + RECORD_PAGE_SIZE)
-  }, [effectiveRecordPage, workspace.updateRecords])
-  const visibleOperationRecords = useMemo(() => {
-    const startIndex = (effectiveRecordPage - 1) * RECORD_PAGE_SIZE
-    return workspace.operationRecords.slice(startIndex, startIndex + RECORD_PAGE_SIZE)
-  }, [effectiveRecordPage, workspace.operationRecords])
+  const visibleUpdateRecords = releaseRecordState.items
+  const visibleOperationRecords = operationRecordState.items
   const overviewTaskIds = useMemo(() => overviewTasks.map((task) => task.id), [overviewTasks])
   const overviewVisibleTaskIds = useMemo(
     () => overviewVisibleTasks.map((task) => task.id),
     [overviewVisibleTasks],
   )
   const overviewTaskIdSet = useMemo(() => new Set(overviewTaskIds), [overviewTaskIds])
+  const effectiveOverviewSelectedTaskIds = useMemo(
+    () => overviewSelectedTaskIds.filter((taskId) => overviewTaskIdSet.has(taskId)),
+    [overviewSelectedTaskIds, overviewTaskIdSet],
+  )
   const overviewSelectedTaskSet = useMemo(
-    () => new Set(overviewSelectedTaskIds),
-    [overviewSelectedTaskIds],
+    () => new Set(effectiveOverviewSelectedTaskIds),
+    [effectiveOverviewSelectedTaskIds],
   )
   const overviewSelectedVisibleCount = overviewVisibleTaskIds.filter((taskId) =>
     overviewSelectedTaskSet.has(taskId),
   ).length
   const isAllOverviewTasksSelected =
-    overviewTasks.length > 0 && overviewSelectedTaskIds.length === overviewTasks.length
+    overviewTasks.length > 0 && effectiveOverviewSelectedTaskIds.length === overviewTasks.length
   const isAllOverviewVisibleTasksSelected =
     overviewVisibleTasks.length > 0 &&
     overviewSelectedVisibleCount === overviewVisibleTasks.length
   const isSomeOverviewVisibleTasksSelected =
     overviewSelectedVisibleCount > 0 && !isAllOverviewVisibleTasksSelected
-
-  useEffect(() => {
-    setOverviewSelectedTaskIds((current) => {
-      const next = current.filter((taskId) => overviewTaskIdSet.has(taskId))
-      return next.length === current.length ? current : next
-    })
-  }, [overviewTaskIdSet])
 
   const overviewSelectedTaskId = overviewVisibleTasks.some((task) => task.id === selectedTaskId)
     ? selectedTaskId
@@ -1673,30 +1801,6 @@ function App() {
   const isResourceTimelinePage = activeNav === '资源排期'
   const isOverviewPage =
     !isRecordsPage && !isResourceTimelinePage && !isResourceManagementPage
-  const activeResourceTeam = teamsById[selectedResourceTeamId] ?? workspace.teams[0] ?? null
-  const activeResourceMember = membersById[selectedResourceMemberId] ?? workspace.members[0] ?? null
-  const activeResourceTeamMembers = useMemo(
-    () =>
-      activeResourceTeam
-        ? workspace.members.filter((member) => member.teamId === activeResourceTeam.id)
-        : [],
-    [activeResourceTeam, workspace.members],
-  )
-  const activeResourceTeamTasks = useMemo(
-    () =>
-      activeResourceTeam ? workspace.tasks.filter((task) => task.teamId === activeResourceTeam.id) : [],
-    [activeResourceTeam, workspace.tasks],
-  )
-  const activeResourceMemberTeam = activeResourceMember
-    ? teamsById[activeResourceMember.teamId] ?? null
-    : null
-  const activeResourceMemberTasks = useMemo(
-    () =>
-      activeResourceMember
-        ? workspace.tasks.filter((task) => task.ownerId === activeResourceMember.id)
-        : [],
-    [activeResourceMember, workspace.tasks],
-  )
   const normalizedResourceSearch = resourceSearchValue.trim().toLowerCase()
   const filteredResourceTeams = useMemo(
     () =>
@@ -1727,16 +1831,83 @@ function App() {
       }),
     [normalizedResourceSearch, teamsById, workspace.members],
   )
+  const effectiveSelectedResourceTeamId = useMemo(() => {
+    if (resourcePanelTab === 'team' && normalizedResourceSearch && filteredResourceTeams.length > 0) {
+      return filteredResourceTeams.some((team) => team.id === selectedResourceTeamId)
+        ? selectedResourceTeamId
+        : filteredResourceTeams[0].id
+    }
+
+    if (workspace.teams.some((team) => team.id === selectedResourceTeamId)) {
+      return selectedResourceTeamId
+    }
+
+    return filteredResourceTeams[0]?.id ?? workspace.teams[0]?.id ?? ''
+  }, [
+    filteredResourceTeams,
+    normalizedResourceSearch,
+    resourcePanelTab,
+    selectedResourceTeamId,
+    workspace.teams,
+  ])
+  const effectiveSelectedResourceMemberId = useMemo(() => {
+    if (
+      resourcePanelTab === 'member' &&
+      normalizedResourceSearch &&
+      filteredResourceMembers.length > 0
+    ) {
+      return filteredResourceMembers.some((member) => member.id === selectedResourceMemberId)
+        ? selectedResourceMemberId
+        : filteredResourceMembers[0].id
+    }
+
+    if (workspace.members.some((member) => member.id === selectedResourceMemberId)) {
+      return selectedResourceMemberId
+    }
+
+    return filteredResourceMembers[0]?.id ?? workspace.members[0]?.id ?? ''
+  }, [
+    filteredResourceMembers,
+    normalizedResourceSearch,
+    resourcePanelTab,
+    selectedResourceMemberId,
+    workspace.members,
+  ])
+  const activeResourceTeam = teamsById[effectiveSelectedResourceTeamId] ?? workspace.teams[0] ?? null
+  const activeResourceMember =
+    membersById[effectiveSelectedResourceMemberId] ?? workspace.members[0] ?? null
+  const activeResourceTeamMembers = useMemo(
+    () =>
+      activeResourceTeam
+        ? workspace.members.filter((member) => member.teamId === activeResourceTeam.id)
+        : [],
+    [activeResourceTeam, workspace.members],
+  )
+  const activeResourceTeamTasks = useMemo(
+    () =>
+      activeResourceTeam ? workspace.tasks.filter((task) => task.teamId === activeResourceTeam.id) : [],
+    [activeResourceTeam, workspace.tasks],
+  )
+  const activeResourceMemberTeam = activeResourceMember
+    ? teamsById[activeResourceMember.teamId] ?? null
+    : null
+  const activeResourceMemberTasks = useMemo(
+    () =>
+      activeResourceMember
+        ? workspace.tasks.filter((task) => task.ownerId === activeResourceMember.id)
+        : [],
+    [activeResourceMember, workspace.tasks],
+  )
   const activeResourcePanelTitle = resourcePanelTab === 'team' ? '团队目录' : '成员目录'
   const activeResourcePanelCopy =
     resourcePanelTab === 'team'
       ? '按团队快速浏览负责人、成员规模和项目负载，右侧统一查看与编辑。'
       : '按成员集中查看角色、归属团队与负责项目，减少来回切换确认。'
-  const deleteConfirmTaskIds = deleteTargetId ? [deleteTargetId] : overviewDeleteTargetIds
+  const deleteConfirmTaskIds = deleteTargetId ? [deleteTargetId] : effectiveOverviewSelectedTaskIds
   const deleteConfirmTaskIdSet = new Set(deleteConfirmTaskIds)
   const deleteConfirmTasks = workspace.tasks.filter((task) => deleteConfirmTaskIdSet.has(task.id))
   const deleteConfirmCount = deleteConfirmTaskIds.length
-  const isBulkDeleteConfirm = !deleteTargetId && overviewDeleteTargetIds.length > 0
+  const isBulkDeleteConfirm = !deleteTargetId && effectiveOverviewSelectedTaskIds.length > 0
   const deleteConfirmPreview = deleteConfirmTasks
     .slice(0, 3)
     .map((task) => task.title)
@@ -1760,6 +1931,53 @@ function App() {
     : isResourceManagementPage || isOverviewPage
       ? 'main-panel main-panel-fixed'
       : 'main-panel'
+  const syncBannerMessage = isWorkspaceLoading
+    ? '正在连接 Flask API 并同步最新工作区数据...'
+    : isExporting
+      ? '正在导出 MySQL 当前工作区快照...'
+      : null
+
+  useEffect(() => {
+    if (activeNav !== '记录中心') {
+      return
+    }
+
+    let cancelled = false
+
+    const loadRecords = async () => {
+      try {
+        setWorkspaceError(null)
+        if (recordView === '更新记录') {
+          const payload = await fetchReleaseRecords(effectiveRecordPage, RECORD_PAGE_SIZE)
+          if (!cancelled) {
+            setReleaseRecordState({
+              items: payload.items.map(mapApiReleaseRecordToReleaseRecord),
+              total: payload.total,
+            })
+          }
+          return
+        }
+
+        const payload = await fetchOperationRecords(effectiveRecordPage, RECORD_PAGE_SIZE)
+        if (!cancelled) {
+          setOperationRecordState({
+            items: payload.items.map(mapApiOperationRecordToOperationRecord),
+            total: payload.total,
+          })
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setWorkspaceError(error instanceof Error ? error.message : '记录中心数据加载失败。')
+        }
+      }
+    }
+
+    void loadRecords()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeNav, effectiveRecordPage, recordView])
 
   const syncDragSelection = (nextSelection: DragSelectionState) => {
     dragSelectionRef.current = nextSelection
@@ -2013,27 +2231,6 @@ function App() {
     }
   }, [activeNav])
 
-  const appendOperationRecord = (
-    action: OperationRecord['action'],
-    target: string,
-    detail: string,
-    actor = CURRENT_OPERATOR,
-  ) => {
-    const operation: OperationRecord = {
-      id: createClientId('operation'),
-      actor,
-      time: formatAuditTimeLabel(),
-      action,
-      target,
-      detail,
-    }
-
-    setWorkspace((current) => ({
-      ...current,
-      operationRecords: [operation, ...current.operationRecords].slice(0, 60),
-    }))
-  }
-
   const openRecordsCenter = (nextView: RecordView) => {
     setContextMenu(null)
     setPendingTaskCoachId(null)
@@ -2041,7 +2238,7 @@ function App() {
     setRecordView(nextView)
     setRecordPage(1)
     setActiveNav('记录中心')
-    appendOperationRecord('查看', '记录中心', `打开了${nextView}页面。`)
+    void recordViewAction('记录中心', `打开了${nextView}页面。`)
   }
 
   const createTaskFromMemberAndRange = (
@@ -2071,6 +2268,7 @@ function App() {
       priority: 'P3',
       startOffset: diffCalendarDays(startDate, BASE_DATE),
       duration,
+      sortOrder: options?.insertAtStart ? 0 : workspace.tasks.length,
       color: priorityPalette.P3.solid,
       summary: '请补充项目背景、目标、交付物以及当前风险。',
       milestone: '待补充里程碑',
@@ -2087,18 +2285,12 @@ function App() {
       return
     }
 
-    setWorkspace((current) => ({
-      ...current,
-      tasks: options?.insertAtStart ? [newTask, ...current.tasks] : [...current.tasks, newTask],
-    }))
-
-    appendOperationRecord(
-      '新增',
-      `项目 / ${newTask.title}`,
-      options?.operationDetail ?? `已将项目排期分配给 ${owner.name}。`,
-    )
-
-    setSelectedTaskId(newTask.id)
+    setEditModal({
+      mode: 'create',
+      draft: createDraft(newTask),
+      insertAtStart: options?.insertAtStart,
+      operationDetail: options?.operationDetail,
+    })
   }
 
   const handleSelectTask = (taskId: string, options?: { fromTimeline?: boolean }) => {
@@ -2199,13 +2391,13 @@ function App() {
   }
 
   const openBulkDeleteConfirm = () => {
-    if (overviewSelectedTaskIds.length === 0) {
+    if (effectiveOverviewSelectedTaskIds.length === 0) {
       return
     }
 
     setContextMenu(null)
     setDeleteTargetId(null)
-    setOverviewDeleteTargetIds(overviewSelectedTaskIds)
+    setOverviewDeleteTargetIds(effectiveOverviewSelectedTaskIds)
   }
 
   const openResourceModal = () => {
@@ -2217,7 +2409,7 @@ function App() {
     setResourceDeleteTarget(null)
     setResourcePanelTab('team')
     setActiveNav('组织管理')
-    appendOperationRecord('查看', '组织管理', '打开了团队与成员管理页面。')
+    void recordViewAction('组织管理', '打开了团队与成员管理页面。')
   }
 
   const openTeamCreate = () => {
@@ -2297,30 +2489,6 @@ function App() {
     setMemberEditor(null)
   }
 
-  useEffect(() => {
-    if (resourcePanelTab !== 'team' || !normalizedResourceSearch || filteredResourceTeams.length === 0) {
-      return
-    }
-
-    if (!filteredResourceTeams.some((team) => team.id === selectedResourceTeamId)) {
-      setSelectedResourceTeamId(filteredResourceTeams[0].id)
-    }
-  }, [filteredResourceTeams, normalizedResourceSearch, resourcePanelTab, selectedResourceTeamId])
-
-  useEffect(() => {
-    if (
-      resourcePanelTab !== 'member' ||
-      !normalizedResourceSearch ||
-      filteredResourceMembers.length === 0
-    ) {
-      return
-    }
-
-    if (!filteredResourceMembers.some((member) => member.id === selectedResourceMemberId)) {
-      setSelectedResourceMemberId(filteredResourceMembers[0].id)
-    }
-  }, [filteredResourceMembers, normalizedResourceSearch, resourcePanelTab, selectedResourceMemberId])
-
   const openTeamDeleteConfirm = (teamId: string) => {
     const team = teamsById[teamId]
     if (!team) {
@@ -2347,7 +2515,7 @@ function App() {
     })
   }
 
-  const saveTeamEditor = () => {
+  const saveTeamEditor = async () => {
     if (!teamEditor) {
       return
     }
@@ -2381,41 +2549,34 @@ function App() {
       lead: teamEditor.draft.lead.trim() || '待设置',
     }
 
-    if (teamEditor.mode === 'create') {
-      const newTeam: Team = {
-        id: createClientId('team'),
-        ...draft,
+    try {
+      if (teamEditor.mode === 'create') {
+        const response = await createTeamRequest(draft)
+        setSelectedResourceTeamId(response.item.id)
+        setResourceNotice({
+          tone: 'success',
+          message: `团队“${response.item.name}”创建成功。`,
+        })
+      } else if (teamEditor.teamId) {
+        await updateTeamRequest(teamEditor.teamId, draft)
+        setSelectedResourceTeamId(teamEditor.teamId)
+        setResourceNotice({
+          tone: 'success',
+          message: `团队“${draft.name}”保存成功。`,
+        })
       }
 
-      setWorkspace((current) => ({
-        ...current,
-        teams: [...current.teams, newTeam],
-      }))
-      appendOperationRecord('新增', `团队 / ${newTeam.name}`, `已创建团队，负责人为 ${draft.lead}。`)
+      setTeamEditor(null)
+      await refreshWorkspace()
+    } catch (error) {
       setResourceNotice({
-        tone: 'success',
-        message: `团队“${newTeam.name}”创建成功。`,
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '团队保存失败，请稍后重试。',
       })
-      setSelectedResourceTeamId(newTeam.id)
-    } else if (teamEditor.teamId) {
-      setWorkspace((current) => ({
-        ...current,
-        teams: current.teams.map((team) =>
-          team.id === teamEditor.teamId ? { ...team, ...draft } : team,
-        ),
-      }))
-      appendOperationRecord('修改', `团队 / ${draft.name}`, '已更新团队基础信息。')
-      setResourceNotice({
-        tone: 'success',
-        message: `团队“${draft.name}”保存成功。`,
-      })
-      setSelectedResourceTeamId(teamEditor.teamId)
     }
-
-    setTeamEditor(null)
   }
 
-  const saveMemberEditor = () => {
+  const saveMemberEditor = async () => {
     if (!memberEditor) {
       return
     }
@@ -2448,125 +2609,85 @@ function App() {
       capacityHours: Math.max(1, Number(memberEditor.draft.capacityHours) || 40),
     }
 
-    if (memberEditor.mode === 'create') {
-      const newMember: Member = {
-        id: createClientId('member'),
-        ...draft,
+    try {
+      if (memberEditor.mode === 'create') {
+        const response = await createMemberRequest(draft)
+        setSelectedResourceMemberId(response.item.id)
+        setResourceNotice({
+          tone: 'success',
+          message: `成员“${response.item.name}”创建成功。`,
+        })
+      } else if (memberEditor.memberId) {
+        await updateMemberRequest(memberEditor.memberId, draft)
+        setSelectedResourceMemberId(memberEditor.memberId)
+        setResourceNotice({
+          tone: 'success',
+          message: `成员“${draft.name}”保存成功。`,
+        })
       }
 
-      setWorkspace((current) => ({
-        ...current,
-        members: [...current.members, newMember],
-      }))
-      appendOperationRecord('新增', `成员 / ${newMember.name}`, `已加入 ${selectedTeam.name}。`)
+      setMemberEditor(null)
+      await refreshWorkspace()
+    } catch (error) {
       setResourceNotice({
-        tone: 'success',
-        message: `成员“${newMember.name}”创建成功。`,
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '成员保存失败，请稍后重试。',
       })
-      setSelectedResourceMemberId(newMember.id)
-    } else if (memberEditor.memberId) {
-      const previousMember = membersById[memberEditor.memberId]
-
-      setWorkspace((current) => ({
-        ...current,
-        members: current.members.map((member) =>
-          member.id === memberEditor.memberId ? { ...member, ...draft } : member,
-        ),
-        tasks: current.tasks.map((task) =>
-          task.ownerId === memberEditor.memberId
-            ? {
-                ...task,
-                teamId: draft.teamId,
-              }
-            : task,
-        ),
-        teams: current.teams.map((team) =>
-          previousMember && team.lead === previousMember.name
-            ? { ...team, lead: draft.name }
-            : team,
-        ),
-      }))
-      appendOperationRecord('修改', `成员 / ${draft.name}`, '已更新成员档案与团队归属。')
-      setResourceNotice({
-        tone: 'success',
-        message: `成员“${draft.name}”保存成功。`,
-      })
-      setSelectedResourceMemberId(memberEditor.memberId)
     }
-
-    setMemberEditor(null)
   }
 
-  const handleDeleteTeam = (teamId: string) => {
+  const handleDeleteTeam = async (teamId: string) => {
     const team = teamsById[teamId]
     if (!team) {
       return
     }
 
-    const relatedMembers = workspace.members.filter((member) => member.teamId === teamId)
-    const relatedTasks = workspace.tasks.filter((task) => task.teamId === teamId)
-
-    if (relatedMembers.length > 0 || relatedTasks.length > 0) {
+    try {
+      await deleteTeamRequest(teamId)
+      if (teamFilter === teamId) {
+        setTeamFilter('全部团队')
+      }
       setResourceNotice({
-        tone: 'danger',
-        message: `团队“${team.name}”仍关联 ${relatedMembers.length} 名成员和 ${relatedTasks.length} 个项目，请先迁移或清理后再删除。`,
+        tone: 'success',
+        message: `团队“${team.name}”已删除。`,
       })
       setResourceDeleteTarget(null)
-      return
-    }
-
-    setWorkspace((current) => ({
-      ...current,
-      teams: current.teams.filter((item) => item.id !== teamId),
-    }))
-
-    if (teamFilter === teamId) {
-      setTeamFilter('全部团队')
-    }
-
-    appendOperationRecord('删除', `团队 / ${team.name}`, '已从当前工作区移除团队。')
-    setResourceNotice({
-      tone: 'success',
-      message: `团队“${team.name}”已删除。`,
-    })
-    setResourceDeleteTarget(null)
-    if (teamEditor?.teamId === teamId) {
-      setTeamEditor(null)
+      if (teamEditor?.teamId === teamId) {
+        setTeamEditor(null)
+      }
+      await refreshWorkspace()
+    } catch (error) {
+      setResourceNotice({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '团队删除失败，请稍后重试。',
+      })
+      setResourceDeleteTarget(null)
     }
   }
 
-  const handleDeleteMember = (memberId: string) => {
+  const handleDeleteMember = async (memberId: string) => {
     const member = membersById[memberId]
     if (!member) {
       return
     }
 
-    const ownedTasks = workspace.tasks.filter((task) => task.ownerId === memberId)
-    if (ownedTasks.length > 0) {
+    try {
+      await deleteMemberRequest(memberId)
       setResourceNotice({
-        tone: 'danger',
-        message: `成员“${member.name}”仍负责 ${ownedTasks.length} 个项目，请先转交或删除这些项目后再删除成员。`,
+        tone: 'success',
+        message: `成员“${member.name}”已删除。`,
       })
       setResourceDeleteTarget(null)
-      return
-    }
-
-    setWorkspace((current) => ({
-      ...current,
-      members: current.members.filter((item) => item.id !== memberId),
-      teams: current.teams.map((team) =>
-        team.lead === member.name ? { ...team, lead: '待设置' } : team,
-      ),
-    }))
-
-    appendOperationRecord('删除', `成员 / ${member.name}`, '已从当前工作区移除成员。')
-    setResourceNotice({
-      tone: 'success',
-      message: `成员“${member.name}”已删除。`,
-    })
-    setResourceDeleteTarget(null)
-    if (memberEditor?.memberId === memberId) {
-      setMemberEditor(null)
+      if (memberEditor?.memberId === memberId) {
+        setMemberEditor(null)
+      }
+      await refreshWorkspace()
+    } catch (error) {
+      setResourceNotice({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '成员删除失败，请稍后重试。',
+      })
+      setResourceDeleteTarget(null)
     }
   }
 
@@ -2828,62 +2949,74 @@ function App() {
         detail = `已将项目结束时间调整为 ${formatShortDateLabel(nextEndDate)}，当前总工期为 ${currentInteraction.previewDuration} 天。`
       }
 
-      setWorkspace((current) => {
-        const currentTask = current.tasks.find((task) => task.id === currentInteraction.taskId)
-        if (!currentTask) {
-          return current
-        }
+      const remainingTasks = workspace.tasks.filter((task) => task.id !== currentInteraction.taskId)
+      const visibleOwnerTasks = remainingTasks.filter(
+        (task) =>
+          task.ownerId === currentInteraction.previewOwnerId &&
+          taskOverlapsWindow(task, visibleMonthStart, visibleMonthEnd),
+      )
+      const clampedLaneIndex = Math.max(
+        0,
+        Math.min(currentInteraction.previewLaneIndex, visibleOwnerTasks.length),
+      )
 
-        const nextTask = {
-          ...currentTask,
-          ownerId: currentInteraction.previewOwnerId,
-          teamId: currentInteraction.previewTeamId,
-          startOffset: currentInteraction.previewStartOffset,
-          duration: currentInteraction.previewDuration,
-          updatedAt: formatTimeLabel(),
-        }
+      let insertIndex = remainingTasks.length
 
-        const remainingTasks = current.tasks.filter((task) => task.id !== currentInteraction.taskId)
-        const visibleOwnerTasks = remainingTasks.filter(
-          (task) =>
-            task.ownerId === currentInteraction.previewOwnerId &&
-            taskOverlapsWindow(task, visibleMonthStart, visibleMonthEnd),
-        )
-        const clampedLaneIndex = Math.max(
-          0,
-          Math.min(currentInteraction.previewLaneIndex, visibleOwnerTasks.length),
-        )
-
-        let insertIndex = remainingTasks.length
-
-        if (visibleOwnerTasks.length > 0 && clampedLaneIndex < visibleOwnerTasks.length) {
-          const anchorTask = visibleOwnerTasks[clampedLaneIndex]
-          const anchorIndex = remainingTasks.findIndex((task) => task.id === anchorTask.id)
-          insertIndex = anchorIndex === -1 ? remainingTasks.length : anchorIndex
-        } else {
-          const ownerTaskIndices = remainingTasks.reduce<number[]>((indices, task, index) => {
-            if (task.ownerId === currentInteraction.previewOwnerId) {
-              indices.push(index)
-            }
-            return indices
-          }, [])
-
-          if (ownerTaskIndices.length > 0) {
-            insertIndex = ownerTaskIndices[ownerTaskIndices.length - 1] + 1
+      if (visibleOwnerTasks.length > 0 && clampedLaneIndex < visibleOwnerTasks.length) {
+        const anchorTask = visibleOwnerTasks[clampedLaneIndex]
+        const anchorIndex = remainingTasks.findIndex((task) => task.id === anchorTask.id)
+        insertIndex = anchorIndex === -1 ? remainingTasks.length : anchorIndex
+      } else {
+        const ownerTaskIndices = remainingTasks.reduce<number[]>((indices, task, index) => {
+          if (task.ownerId === currentInteraction.previewOwnerId) {
+            indices.push(index)
           }
-        }
+          return indices
+        }, [])
 
-        return {
-          ...current,
-          tasks: [
-            ...remainingTasks.slice(0, insertIndex),
-            nextTask,
-            ...remainingTasks.slice(insertIndex),
-          ],
+        if (ownerTaskIndices.length > 0) {
+          insertIndex = ownerTaskIndices[ownerTaskIndices.length - 1] + 1
         }
-      })
+      }
 
-      appendOperationRecord('修改', `项目 / ${previousTask.title}`, detail)
+      const optimisticTask: Task = {
+        ...previousTask,
+        ownerId: currentInteraction.previewOwnerId,
+        teamId: currentInteraction.previewTeamId,
+        startOffset: currentInteraction.previewStartOffset,
+        duration: currentInteraction.previewDuration,
+        sortOrder: insertIndex,
+        updatedAt: formatTimeLabel(),
+      }
+
+      setWorkspace((current) => ({
+        ...current,
+        tasks: [
+          ...remainingTasks.slice(0, insertIndex),
+          optimisticTask,
+          ...remainingTasks.slice(insertIndex),
+        ].map((task, index) => ({
+          ...task,
+          sortOrder: index,
+        })),
+      }))
+
+      void (async () => {
+        try {
+          await updateTaskRequest(currentInteraction.taskId, {
+            ownerId: currentInteraction.previewOwnerId,
+            startDate: formatDateInputValue(nextStartDate),
+            duration: currentInteraction.previewDuration,
+            sortOrder: insertIndex,
+            operationDetail: detail,
+          })
+          await refreshWorkspace()
+          setSelectedTaskId(currentInteraction.taskId)
+        } catch (error) {
+          setWorkspaceError(error instanceof Error ? error.message : '项目排期更新失败。')
+          await refreshWorkspace()
+        }
+      })()
     }
 
     window.addEventListener('mousemove', handleMouseMove)
@@ -2893,7 +3026,7 @@ function App() {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [isTaskTimelineInteracting, membersById, visibleMonthEnd, visibleMonthStart, workspace.tasks])
+  }, [isTaskTimelineInteracting, membersById, refreshWorkspace, visibleMonthEnd, visibleMonthStart, workspace.tasks])
 
   useEffect(() => {
     if (!isMemberRowReordering) {
@@ -2963,20 +3096,30 @@ function App() {
         return
       }
 
-      const draggedMember = membersById[currentReorder.memberId]
+      const nextMembers = reorderVisibleMembers(workspace.members, nextVisibleMemberIds).map(
+        (member, index) => ({
+          ...member,
+          sortOrder: index,
+        }),
+      )
+      const nextIndex = nextMembers.findIndex((member) => member.id === currentReorder.memberId)
 
       setWorkspace((current) => ({
         ...current,
-        members: reorderVisibleMembers(current.members, nextVisibleMemberIds),
+        members: nextMembers,
       }))
 
-      if (draggedMember) {
-        appendOperationRecord(
-          '修改',
-          `成员顺序 / ${draggedMember.name}`,
-          `已在资源排期中调整 ${draggedMember.name} 的上下位置。`,
-        )
-      }
+      void (async () => {
+        try {
+          await updateMemberRequest(currentReorder.memberId, {
+            sortOrder: Math.max(0, nextIndex),
+          })
+          await refreshWorkspace()
+        } catch (error) {
+          setWorkspaceError(error instanceof Error ? error.message : '成员顺序更新失败。')
+          await refreshWorkspace()
+        }
+      })()
     }
 
     window.addEventListener('mousemove', handleMouseMove)
@@ -2986,67 +3129,61 @@ function App() {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [appendOperationRecord, isMemberRowReordering, membersById])
+  }, [isMemberRowReordering, membersById, refreshWorkspace, workspace.members])
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (!editModal) {
       return
     }
 
     const nextOwner = membersById[editModal.draft.ownerId]
 
-    if (editModal.mode === 'create') {
-      const newTask: Task = {
-        id: createClientId('task'),
-        ...editModal.draft,
-        teamId: nextOwner?.teamId ?? workspace.members[0]?.teamId ?? '',
-        color: priorityPalette[editModal.draft.priority].solid,
-        updatedAt: formatTimeLabel(),
-      }
-
-      setWorkspace((current) => ({
-        ...current,
-        tasks: editModal.insertAtStart ? [newTask, ...current.tasks] : [...current.tasks, newTask],
-      }))
-
-      appendOperationRecord(
-        '新增',
-        `项目 / ${editModal.draft.title}`,
-        editModal.operationDetail ?? `已将项目排期分配给 ${nextOwner?.name ?? '当前负责人'}。`,
-      )
-
-      setSelectedTaskId(newTask.id)
-      setEditModal(null)
+    if (!nextOwner) {
+      setWorkspaceError('请先为项目选择有效负责人。')
       return
     }
 
-    setWorkspace((current) => ({
-      ...current,
-      tasks: current.tasks.map((task) =>
-        task.id === editModal.taskId
-          ? {
-              ...task,
-              ...editModal.draft,
-              teamId: nextOwner?.teamId ?? task.teamId,
-              color: priorityPalette[editModal.draft.priority].solid,
-              updatedAt: formatTimeLabel(),
-            }
-          : task,
-      ),
-    }))
+    try {
+      const payload = {
+        title: editModal.draft.title.trim(),
+        ownerId: editModal.draft.ownerId,
+        progress: Math.max(0, Math.min(100, Number(editModal.draft.progress) || 0)),
+        status: editModal.draft.status,
+        priority: editModal.draft.priority,
+        startDate: formatDateInputValue(getTaskStartDate(editModal.draft)),
+        duration: Math.max(1, Number(editModal.draft.duration) || 1),
+        summary: editModal.draft.summary.trim(),
+        milestone: editModal.draft.milestone.trim(),
+      }
 
-    appendOperationRecord('修改', `项目 / ${editModal.draft.title}`, '已通过弹窗保存项目详情。')
-    setEditModal(null)
+      if (editModal.mode === 'create') {
+        const response = await createTaskRequest({
+          ...payload,
+          sortOrder: editModal.insertAtStart ? 0 : workspace.tasks.length,
+        })
+        setSelectedTaskId(response.item.id)
+      } else {
+        await updateTaskRequest(editModal.taskId, {
+          ...payload,
+          operationDetail: '已通过弹窗保存项目详情。',
+        })
+        setSelectedTaskId(editModal.taskId)
+      }
+
+      setEditModal(null)
+      await refreshWorkspace()
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : '项目保存失败，请稍后重试。')
+    }
   }
 
-  const handleDeleteTask = () => {
+  const handleDeleteTask = async () => {
     const deletingIds = deleteTargetId ? [deleteTargetId] : overviewDeleteTargetIds
     if (deletingIds.length === 0) {
       return
     }
 
     const deletingTaskIdSet = new Set(deletingIds)
-    const deletingTasks = workspace.tasks.filter((task) => deletingTaskIdSet.has(task.id))
     const remainingTasks = workspace.tasks.filter((task) => !deletingTaskIdSet.has(task.id))
 
     setWorkspace((current) => ({
@@ -3059,28 +3196,17 @@ function App() {
     }
 
     setOverviewSelectedTaskIds((current) => current.filter((taskId) => !deletingTaskIdSet.has(taskId)))
-
-    if (deletingIds.length === 1) {
-      const deletingTask = deletingTasks[0]
-      appendOperationRecord(
-        '删除',
-        deletingTask ? `项目 / ${deletingTask.title}` : '项目 / 未知项目',
-        deletingTask ? `已删除项目“${deletingTask.title}”。` : '已从当前工作区删除项目。',
-      )
-    } else {
-      const removedCount = deletingTasks.length > 0 ? deletingTasks.length : deletingIds.length
-      const previewTitles = deletingTasks.slice(0, 3).map((task) => `“${task.title}”`)
-      const previewSuffix =
-        removedCount > previewTitles.length ? ` 等 ${removedCount - previewTitles.length} 个项目。` : '。'
-      const detail =
-        previewTitles.length > 0
-          ? `已批量删除 ${removedCount} 个项目：${previewTitles.join('、')}${previewSuffix}`
-          : `已批量删除 ${removedCount} 个项目。`
-
-      appendOperationRecord('删除', `项目 / 批量删除 ${removedCount} 项`, detail)
-    }
-
     closeDeleteConfirm()
+
+    try {
+      for (const taskId of deletingIds) {
+        await deleteTaskRequest(taskId)
+      }
+      await refreshWorkspace()
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : '项目删除失败，请稍后重试。')
+      await refreshWorkspace()
+    }
   }
 
   const handleCreateTask = () => {
@@ -3104,18 +3230,25 @@ function App() {
     })
   }
 
-  const exportWorkspace = () => {
-    const blob = new Blob([JSON.stringify(workspace, null, 2)], {
-      type: 'application/json;charset=utf-8',
-    })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = 'human-gantt-workspace.json'
-    link.click()
-    URL.revokeObjectURL(url)
-
-    appendOperationRecord('导出', '工作区 JSON', '已导出当前本地工作区数据。')
+  const exportWorkspace = async () => {
+    try {
+      setIsExporting(true)
+      const blob = await exportWorkspaceSnapshot()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'resource-planning-workspace.json'
+      link.click()
+      URL.revokeObjectURL(url)
+      await refreshWorkspace()
+      if (activeNav === '记录中心') {
+        await refreshRecordPage(recordView, recordPage)
+      }
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : '导出失败，请稍后重试。')
+    } finally {
+      setIsExporting(false)
+    }
   }
 
   const navItems: NavSection[] = ['总览', '资源排期', '组织管理', '记录中心']
@@ -3167,6 +3300,10 @@ function App() {
       </aside>
 
       <main className={mainPanelClassName}>
+        {syncBannerMessage ? (
+          <div className="resource-notice is-success">{syncBannerMessage}</div>
+        ) : null}
+        {workspaceError ? <div className="resource-notice is-danger">{workspaceError}</div> : null}
         {isRecordsPage ? (
           <>
             <header className="topbar records-topbar">
@@ -3180,10 +3317,10 @@ function App() {
 
               <div className="topbar-actions records-head-meta">
                 <span className="summary-tag neutral-tag">
-                  更新 {workspace.updateRecords.length}
+                  更新 {releaseRecordState.total}
                 </span>
                 <span className="summary-tag blue-tag">
-                  操作 {workspace.operationRecords.length}
+                  操作 {operationRecordState.total}
                 </span>
               </div>
             </header>
@@ -3237,7 +3374,7 @@ function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {workspace.updateRecords.length === 0 ? (
+                        {releaseRecordState.total === 0 ? (
                           <tr>
                             <td colSpan={3} className="records-empty-cell">
                               还没有版本更新记录。
@@ -3274,7 +3411,7 @@ function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {workspace.operationRecords.length === 0 ? (
+                        {operationRecordState.total === 0 ? (
                           <tr>
                             <td colSpan={5} className="records-empty-cell">
                               还没有操作记录。
@@ -3369,7 +3506,10 @@ function App() {
                           role="tab"
                           aria-selected={resourcePanelTab === 'team'}
                           className={resourcePanelTab === 'team' ? 'resource-panel-tab is-active' : 'resource-panel-tab'}
-                          onClick={() => setResourcePanelTab('team')}
+                          onClick={() => {
+                            setResourcePanelTab('team')
+                            setResourceSearchValue('')
+                          }}
                         >
                           团队视图
                           <span>{workspace.teams.length}</span>
@@ -3379,7 +3519,10 @@ function App() {
                           role="tab"
                           aria-selected={resourcePanelTab === 'member'}
                           className={resourcePanelTab === 'member' ? 'resource-panel-tab is-active' : 'resource-panel-tab'}
-                          onClick={() => setResourcePanelTab('member')}
+                          onClick={() => {
+                            setResourcePanelTab('member')
+                            setResourceSearchValue('')
+                          }}
                         >
                           成员视图
                           <span>{workspace.members.length}</span>
@@ -3992,8 +4135,12 @@ function App() {
                     <button className="ghost-button topbar-action-button" onClick={handleCreateTask}>
                       新增项目
                     </button>
-                    <button className="ghost-button topbar-action-button" onClick={exportWorkspace}>
-                      导出 JSON
+                    <button
+                      className="ghost-button topbar-action-button"
+                      onClick={exportWorkspace}
+                      disabled={isExporting}
+                    >
+                      {isExporting ? '导出中...' : '导出 JSON'}
                     </button>
                   </div>
                 </header>

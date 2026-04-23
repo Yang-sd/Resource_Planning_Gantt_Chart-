@@ -1,18 +1,14 @@
-# Human Gantt Workbench
+# Resource Planning Workspace
 
-一个基于 React + TypeScript + Vite 的人力甘特图工作台 MVP。
+一个基于 React + TypeScript + Vite + Flask + MySQL 的前后端分离项目排期工作台。
 
-当前版本不再只是视觉原型，而是已经补齐了可演示的核心闭环：
+当前版本已经完成从前端单页演示到三容器架构的改造：
 
-- 搜索项目、成员、团队
-- 按团队 / 状态筛选
-- 切换 7 / 10 / 14 天时间视窗
-- 点击项目查看和编辑详情
-- 新建项目
-- 调整进度、持续时间、开始时间
-- 自动保存到浏览器本地 `localStorage`
-- 导出 JSON 工作区快照
-- Docker 本地部署
+- 前端：React/Vite，Nginx 静态托管并反向代理 `/api`
+- 后端：Flask + SQLAlchemy + Alembic + Gunicorn
+- 数据库：MySQL 8 持久化存储
+- 核心数据：团队、成员、项目、更新记录、操作记录
+- 核心交互：总览筛选、组织管理 CRUD、资源排期拖拽/拉伸/上下调整、记录中心分页、导出 JSON
 
 详细的产品、UI/UX 和开发说明见：
 
@@ -24,6 +20,7 @@
 
 - Node.js 可用
 - `pnpm` 已安装
+- Python 3.11+ 可用
 
 启动：
 
@@ -38,20 +35,34 @@ pnpm dev
 http://localhost:5173
 ```
 
+前端开发模式会把 `/api` 自动代理到：
+
+```text
+http://127.0.0.1:8000
+```
+
+后端本地运行：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements-dev.txt
+python -m backend.manage init-db
+gunicorn --bind 0.0.0.0:8000 backend.wsgi:app
+```
+
 生产构建：
 
 ```bash
 pnpm build
 ```
 
-## Docker 运行
+## Docker Compose
 
-如果本机没有 `docker compose` 插件，使用下面这组命令：
+如果机器支持 `docker compose`：
 
 ```bash
-docker build -t human-gantt-workbench .
-docker rm -f human-gantt-workbench-app 2>/dev/null || true
-docker run -d --name human-gantt-workbench-app -p 8080:8080 human-gantt-workbench
+docker compose up --build -d
 ```
 
 运行后访问：
@@ -60,11 +71,47 @@ docker run -d --name human-gantt-workbench-app -p 8080:8080 human-gantt-workbenc
 http://127.0.0.1:8080
 ```
 
-查看运行状态：
+接口健康检查：
 
 ```bash
-docker ps
-docker logs human-gantt-workbench-app
+curl http://127.0.0.1:8000/api/health
+```
+
+## 纯 Docker 启动
+
+当前仓库额外提供一套不依赖 `docker compose` 的纯 `docker` 脚本：
+
+```bash
+pnpm docker:up
+```
+
+停止容器：
+
+```bash
+pnpm docker:down
+```
+
+如果希望同时清空 MySQL 持久卷：
+
+```bash
+bash scripts/docker-down.sh --purge-data
+```
+
+执行三容器冒烟回归：
+
+```bash
+pnpm docker:smoke
+```
+
+## 后端测试
+
+后端测试使用真实 MySQL 容器，不用 SQLite 代替：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements-dev.txt
+pytest backend/tests
 ```
 
 ## GitHub 发布
