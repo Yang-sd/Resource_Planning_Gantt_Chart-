@@ -3263,7 +3263,9 @@ function App() {
     >
       <aside className="sidebar">
         <div className="brand-card">
-          <div className="brand-mark">RG</div>
+          <div className="brand-mark" aria-hidden="true">
+            <img className="brand-mark-image" src="/favicon.svg" alt="" />
+          </div>
           <div className="brand-copy">
             <p className="caps">产品定位</p>
             <h1 className="brand-title">人力排期工作台</h1>

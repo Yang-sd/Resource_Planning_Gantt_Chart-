@@ -61,10 +61,18 @@
 }
 
 .brand-mark {
+  background: transparent;
   border-radius: 12px;
   font-size: 15px;
   height: 38px;
+  overflow: hidden;
   width: 38px;
+}
+
+.brand-mark-image {
+  display: block;
+  height: 100%;
+  width: 100%;
 }
 
 .caps {
