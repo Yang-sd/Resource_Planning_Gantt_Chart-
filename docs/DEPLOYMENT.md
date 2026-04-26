@@ -1,6 +1,6 @@
 # 部署与运维说明
 
-本文档说明如何从 GitHub 拉取代码并快速部署项目。项目支持两种部署方式：推荐的纯 Docker 脚本部署，以及可选的 Docker Compose 部署。
+本文档说明如何从 GitHub 拉取代码并快速部署项目。项目支持三种部署方式：拉取单容器镜像运行、从源码构建单容器、三容器部署。
 
 ## 前置条件
 
@@ -14,7 +14,94 @@
 - Node.js + pnpm，仅在需要本地开发或使用 `pnpm docker:*` 快捷命令时需要。
 - docker compose，仅在使用 Compose 部署时需要。
 
-## 方式一：纯 Docker 一键部署
+## 方式一：拉取镜像单容器部署
+
+这是给最终使用者最省事的部署方式。镜像里已经包含 Nginx、Flask API 和 MySQL，运行时只需要一个容器。
+
+```bash
+docker volume create resource-planning-data
+docker run -d \
+  --name resource-planning \
+  -p 8080:8080 \
+  -v resource-planning-data:/var/lib/mysql \
+  ghcr.io/yang-sd/resource-planning-gantt-chart:latest
+```
+
+访问：
+
+```text
+http://127.0.0.1:8080
+```
+
+镜像标签说明：
+
+- `latest`：`main` 分支发布的稳定镜像。
+- `single-container`：`feat/single-container-image` 分支发布的测试镜像。
+- `sha-xxxxxxxxxxxx`：每次 GitHub Actions 构建生成的精确提交镜像。
+
+停止：
+
+```bash
+docker rm -f resource-planning
+```
+
+清空本地数据：
+
+```bash
+docker rm -f resource-planning
+docker volume rm resource-planning-data
+```
+
+可配置环境变量：
+
+```bash
+docker run -d \
+  --name resource-planning \
+  -p 8080:8080 \
+  -v resource-planning-data:/var/lib/mysql \
+  -e SECRET_KEY='replace-with-random-secret' \
+  -e MYSQL_PASSWORD='replace-db-password' \
+  -e MYSQL_ROOT_PASSWORD='replace-root-password' \
+  ghcr.io/yang-sd/resource-planning-gantt-chart:latest
+```
+
+注意：GitHub Container Registry 的包需要设置为 Public，未公开前拉取镜像可能需要登录 GitHub。
+
+## 方式二：从源码构建单容器
+
+适合开发者在本地从源码直接打出一个自包含镜像：
+
+```bash
+git clone git@github.com:Yang-sd/Resource_Planning_Gantt_Chart-.git
+cd Resource_Planning_Gantt_Chart-
+bash scripts/docker-single-up.sh
+```
+
+指定端口：
+
+```bash
+WEB_PORT=8081 bash scripts/docker-single-up.sh
+```
+
+停止但保留数据：
+
+```bash
+bash scripts/docker-single-down.sh
+```
+
+停止并清空单容器数据卷：
+
+```bash
+bash scripts/docker-single-down.sh --purge-data
+```
+
+单容器冒烟测试：
+
+```bash
+WEB_PORT=8082 bash scripts/docker-single-smoke.sh
+```
+
+## 方式三：纯 Docker 三容器部署
 
 这套方式不依赖 `docker compose`，适合只有 Docker 的机器。
 
@@ -72,7 +159,7 @@ bash scripts/docker-down.sh --purge-data
 
 注意：`--purge-data` 会删除 `resource-planning-mysql-data`，本地数据库数据会丢失。
 
-## 方式二：Docker Compose 部署
+## 方式四：Docker Compose 三容器部署
 
 如果机器支持 Compose：
 

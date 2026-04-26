@@ -16,6 +16,12 @@ pnpm build
 WEB_PORT=8081 bash scripts/docker-smoke.sh
 ```
 
+如果需要验证单容器镜像：
+
+```bash
+WEB_PORT=8082 bash scripts/docker-single-smoke.sh
+```
+
 ## 前端检查
 
 ```bash
@@ -81,6 +87,25 @@ WEB_PORT=8081 bash scripts/docker-smoke.sh
 
 ```text
 Docker smoke test passed.
+```
+
+## 单容器 smoke
+
+```bash
+WEB_PORT=8082 bash scripts/docker-single-smoke.sh
+```
+
+这个脚本会构建 `Dockerfile.all-in-one`，启动一个包含 Nginx、Flask API、MySQL 的容器，并验证：
+
+- `/api/health`
+- 前端首页
+- 管理员登录
+- Bootstrap 种子数据
+
+通过标志：
+
+```text
+Single-container smoke test passed.
 ```
 
 ## 手工验收清单

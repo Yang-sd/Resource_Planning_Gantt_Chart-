@@ -1,3 +1,10 @@
+# 分支：feat/single-container-image
+
+- 新增 `Dockerfile.all-in-one`，支持把前端、Flask API 和 MySQL 打包到一个镜像里。
+- 新增单容器启动、停止和冒烟测试脚本：`docker-single-up.sh`、`docker-single-down.sh`、`docker-single-smoke.sh`。
+- 新增 GitHub Actions 发布流程，推送后可发布到 `ghcr.io/yang-sd/resource-planning-gantt-chart`。
+- 部署文档补充“拉镜像直接运行”和“源码构建单容器”两种极速部署路径。
+
 # 版本迭代记录
 
 ## v1.9.0

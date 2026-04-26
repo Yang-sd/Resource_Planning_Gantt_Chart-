@@ -1,0 +1,67 @@
+name: Publish single-container image
+
+on:
+  push:
+    branches:
+      - main
+      - feat/single-container-image
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set image tags
+        id: image
+        shell: bash
+        run: |
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/${owner}/resource-planning-gantt-chart"
+          sha_tag="${image}:sha-${GITHUB_SHA::12}"
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version_tag="${image}:${GITHUB_REF_NAME}"
+            printf "image=%s\n" "$image" >> "$GITHUB_OUTPUT"
+            printf "tags<<EOF\n%s\n%s\nEOF\n" "$version_tag" "$sha_tag" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            stable_tag="${image}:latest"
+          else
+            stable_tag="${image}:single-container"
+          fi
+
+          printf "image=%s\n" "$image" >> "$GITHUB_OUTPUT"
+          printf "tags<<EOF\n%s\n%s\nEOF\n" "$stable_tag" "$sha_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push all-in-one image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.all-in-one
+          push: true
+          tags: ${{ steps.image.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Resource Planning Gantt Chart all-in-one image

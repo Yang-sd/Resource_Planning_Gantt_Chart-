@@ -10,7 +10,10 @@
     "preview": "vite preview",
     "docker:up": "bash scripts/docker-up.sh",
     "docker:down": "bash scripts/docker-down.sh",
-    "docker:smoke": "bash scripts/docker-smoke.sh"
+    "docker:smoke": "bash scripts/docker-smoke.sh",
+    "docker:single:up": "bash scripts/docker-single-up.sh",
+    "docker:single:down": "bash scripts/docker-single-down.sh",
+    "docker:single:smoke": "bash scripts/docker-single-smoke.sh"
   },
   "dependencies": {
     "react": "^19.2.4",

@@ -25,13 +25,32 @@
 
 ## 一键部署
 
-如果机器已经安装 Docker，最简单的部署方式是：
+如果机器已经安装 Docker，最快的方式是直接运行单容器镜像：
+
+```bash
+docker volume create resource-planning-data
+docker run -d \
+  --name resource-planning \
+  -p 8080:8080 \
+  -v resource-planning-data:/var/lib/mysql \
+  ghcr.io/yang-sd/resource-planning-gantt-chart:latest
+```
+
+访问地址：
+
+```text
+http://127.0.0.1:8080
+```
+
+如果你是从源码部署，也可以使用纯 Docker 脚本：
 
 ```bash
 git clone git@github.com:Yang-sd/Resource_Planning_Gantt_Chart-.git
 cd Resource_Planning_Gantt_Chart-
 bash scripts/docker-up.sh
 ```
+
+当前功能分支的 GitHub Actions 会先发布 `single-container` 测试标签；合并到 `main` 后会发布 `latest` 稳定标签。
 
 默认访问地址：
 
@@ -101,6 +120,10 @@ WEB_PORT=8081 bash scripts/docker-smoke.sh
 
 | 场景 | 命令 |
 | --- | --- |
+| 拉镜像单容器运行 | `docker run -d --name resource-planning -p 8080:8080 -v resource-planning-data:/var/lib/mysql ghcr.io/yang-sd/resource-planning-gantt-chart:latest` |
+| 源码构建单容器 | `bash scripts/docker-single-up.sh` |
+| 停止源码单容器 | `bash scripts/docker-single-down.sh` |
+| 单容器冒烟测试 | `bash scripts/docker-single-smoke.sh` |
 | 纯 Docker 启动 | `bash scripts/docker-up.sh` |
 | 指定前端端口启动 | `WEB_PORT=8081 bash scripts/docker-up.sh` |
 | 停止并删除容器，保留 MySQL 数据 | `bash scripts/docker-down.sh` |
