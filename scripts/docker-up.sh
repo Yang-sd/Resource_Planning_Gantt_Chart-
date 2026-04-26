@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# One-command Docker deployment script.
+#
+# Why this script exists:
+# - Some local machines may not have `docker compose`.
+# - The project still needs a reproducible way to start web, API and MySQL.
+# - The script intentionally keeps MySQL data in a named volume so ordinary
+#   restarts do not wipe business data.
+#
+# Common usage:
+#   bash scripts/docker-up.sh
+#   WEB_PORT=8081 bash scripts/docker-up.sh
+
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 NETWORK_NAME="resource-planning-net"
 MYSQL_CONTAINER="resource-planning-mysql"
@@ -10,12 +22,17 @@ MYSQL_VOLUME="resource-planning-mysql-data"
 WEB_IMAGE="resource-planning-web:latest"
 API_IMAGE="resource-planning-api:latest"
 LEGACY_WEB_CONTAINER="human-gantt-workbench-app"
+WEB_PORT="${WEB_PORT:-8080}"
+API_PORT="${API_PORT:-8000}"
+MYSQL_PORT="${MYSQL_PORT:-3306}"
 
 wait_for_health() {
   local container_name="$1"
   local retries="${2:-60}"
   local delay_seconds="${3:-2}"
 
+  # Container startup is asynchronous. Waiting on Docker health status keeps the
+  # next service from booting before its dependency is actually ready.
   for _ in $(seq 1 "$retries"); do
     status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}running{{end}}' "$container_name" 2>/dev/null || true)"
     if [ "$status" = "healthy" ] || [ "$status" = "running" ]; then
@@ -29,19 +46,24 @@ wait_for_health() {
   return 1
 }
 
+# Create shared network and persistent volume if they do not already exist.
 docker network inspect "$NETWORK_NAME" >/dev/null 2>&1 || docker network create "$NETWORK_NAME" >/dev/null
 docker volume inspect "$MYSQL_VOLUME" >/dev/null 2>&1 || docker volume create "$MYSQL_VOLUME" >/dev/null
 
+# Remove old containers before recreating them. This does not remove the MySQL
+# volume; use scripts/docker-down.sh --purge-data when a full reset is needed.
 docker rm -f "$WEB_CONTAINER" "$API_CONTAINER" "$MYSQL_CONTAINER" "$LEGACY_WEB_CONTAINER" >/dev/null 2>&1 || true
 
+# Build both app images from the current working tree.
 docker build -t "$WEB_IMAGE" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
 docker build -t "$API_IMAGE" -f "$ROOT_DIR/backend/Dockerfile" "$ROOT_DIR"
 
+# MySQL starts first because the API runs migrations and seed backfill on boot.
 docker run -d \
   --name "$MYSQL_CONTAINER" \
   --network "$NETWORK_NAME" \
   --network-alias mysql \
-  -p 3306:3306 \
+  -p "$MYSQL_PORT:3306" \
   -e MYSQL_DATABASE=resource_planning \
   -e MYSQL_USER=resource_planning \
   -e MYSQL_PASSWORD=resource_planning \
@@ -56,11 +78,12 @@ docker run -d \
 
 wait_for_health "$MYSQL_CONTAINER" 60 2
 
+# API starts second. It connects to MySQL by the network alias `mysql`.
 docker run -d \
   --name "$API_CONTAINER" \
   --network "$NETWORK_NAME" \
   --network-alias api \
-  -p 8000:8000 \
+  -p "$API_PORT:8000" \
   -e DATABASE_URL='mysql+pymysql://resource_planning:resource_planning@mysql:3306/resource_planning?charset=utf8mb4' \
   -e APP_TIMEZONE=Asia/Shanghai \
   --health-cmd="python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()\"" \
@@ -71,10 +94,12 @@ docker run -d \
 
 wait_for_health "$API_CONTAINER" 60 2
 
+# Web starts last. Nginx serves static assets and proxies `/api` to the API
+# container through the Docker network alias `api`.
 docker run -d \
   --name "$WEB_CONTAINER" \
   --network "$NETWORK_NAME" \
-  -p 8080:8080 \
+  -p "$WEB_PORT:8080" \
   --health-cmd="wget -q -O- http://127.0.0.1:8080/ >/dev/null 2>&1 || exit 1" \
   --health-interval=10s \
   --health-timeout=5s \
@@ -83,6 +108,6 @@ docker run -d \
 
 wait_for_health "$WEB_CONTAINER" 60 2
 
-echo "前端: http://127.0.0.1:8080"
-echo "后端: http://127.0.0.1:8000/api/health"
-echo "MySQL: 127.0.0.1:3306"
+echo "前端: http://127.0.0.1:$WEB_PORT"
+echo "后端: http://127.0.0.1:$API_PORT/api/health"
+echo "MySQL: 127.0.0.1:$MYSQL_PORT"

@@ -24,16 +24,22 @@ from backend.config import Config
 
 
 def _find_free_port() -> int:
+    """Reserve a free local port for the temporary MySQL container."""
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
 
 
 def _run_command(command_args: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess and capture output for easier test failure diagnostics."""
+
     return subprocess.run(command_args, check=check, text=True, capture_output=True)
 
 
 def _wait_for_mysql(container_name: str, timeout_seconds: int = 90) -> None:
+    """Poll the MySQL container health check until the database is ready."""
+
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         status = _run_command(
@@ -48,6 +54,8 @@ def _wait_for_mysql(container_name: str, timeout_seconds: int = 90) -> None:
 
 
 def _build_alembic_config(database_url: str) -> AlembicConfig:
+    """Create an Alembic config pointing at the disposable test database."""
+
     backend_dir = Path(__file__).resolve().parents[1]
     config = AlembicConfig(str(backend_dir / "alembic.ini"))
     config.set_main_option("script_location", str(backend_dir / "migrations"))
@@ -56,8 +64,11 @@ def _build_alembic_config(database_url: str) -> AlembicConfig:
 
 
 def _truncate_all_tables() -> None:
+    """Reset tables between tests without recreating the schema each time."""
+
     statements = [
         "SET FOREIGN_KEY_CHECKS = 0",
+        "TRUNCATE TABLE accounts",
         "TRUNCATE TABLE tasks",
         "TRUNCATE TABLE members",
         "TRUNCATE TABLE teams",
@@ -72,6 +83,8 @@ def _truncate_all_tables() -> None:
 
 @pytest.fixture(scope="session")
 def mysql_database_url() -> str:
+    """Provide a real MySQL database URL backed by a short-lived Docker container."""
+
     port = _find_free_port()
     container_name = f"resource-planning-test-mysql-{uuid.uuid4().hex[:8]}"
     image = os.environ.get("TEST_MYSQL_IMAGE", "mysql:8.0")
@@ -115,6 +128,8 @@ def mysql_database_url() -> str:
 
 @pytest.fixture(scope="session")
 def app(mysql_database_url: str):
+    """Create the Flask app once per test session and migrate the schema to head."""
+
     class TestConfig(Config):
         TESTING = True
         SQLALCHEMY_DATABASE_URI = mysql_database_url
@@ -132,6 +147,8 @@ def app(mysql_database_url: str):
 
 @pytest.fixture()
 def client(app):
+    """Return a clean HTTP client with freshly seeded business data per test."""
+
     with app.app_context():
         _truncate_all_tables()
         seed_database()

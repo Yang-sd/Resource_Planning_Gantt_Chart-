@@ -2,12 +2,54 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from werkzeug.security import generate_password_hash
+
 from .extensions import db
-from .models import Member, OperationRecord, ReleaseRecord, Task, Team
+from .models import Account, Member, OperationRecord, ReleaseRecord, Task, Team
 from .services import now_local
 
 
 SEEDED_RELEASE_RECORDS = [
+    {
+        "id": "release-16",
+        "version": "v1.9.0",
+        "updated_at": datetime(2026, 4, 26, 21, 10),
+        "features": [
+            "组织管理中的团队项目和成员负责项目卡片新增“转交”按钮，可直接把项目交给新的负责人。",
+            "项目转交会自动同步项目所属团队，并在保存后切换到新负责人详情，降低找项目和确认归属的成本。",
+            "补齐 README、部署文档、架构说明、测试说明、版本记录和 Docker 脚本注释，方便后续拉取代码后一键部署。",
+        ],
+    },
+    {
+        "id": "release-15",
+        "version": "v1.8.0",
+        "updated_at": datetime(2026, 4, 26, 18, 40),
+        "features": [
+            "个人资料弹窗支持上传 PNG、JPG、WebP 和 GIF 头像，单个文件最大 10MB，并持久化到 MySQL。",
+            "头像改为独立图片接口加载，首屏基础数据只返回头像 URL，避免大图片拖慢 bootstrap。",
+            "修改密码流程移除当前密码输入框，只需要填写新密码并确认，账号卡片和成员头像同步支持图片展示。",
+        ],
+    },
+    {
+        "id": "release-14",
+        "version": "v1.7.1",
+        "updated_at": datetime(2026, 4, 26, 12, 20),
+        "features": [
+            "新建成员时自动创建登录账号，初始密码统一为 123456，并在组织管理保存后直接提示账号信息。",
+            "底部当前账号卡片支持点击打开个人资料弹窗，可修改姓名、头像文字和自己的登录密码。",
+            "个人资料保存会同步成员档案、团队负责人名称和操作记录，避免账号信息与排期成员信息不一致。",
+        ],
+    },
+    {
+        "id": "release-13",
+        "version": "v1.7.0",
+        "updated_at": datetime(2026, 4, 26, 10, 30),
+        "features": [
+            "新增账号登录与角色权限体系，管理员账号拥有全部操作能力，成员账号与人员档案绑定。",
+            "组织管理入口仅对管理员与团队负责人开放，团队与成员写入接口同步加入后端权限校验。",
+            "导航支持独立页面地址，修复总览 tooltip 被遮挡和浏览器标签图标缓存不更新的问题。",
+        ],
+    },
     {
         "id": "release-12",
         "version": "v1.6.3",
@@ -129,9 +171,125 @@ SEEDED_RELEASE_RECORDS = [
 ]
 
 
+def _seed_default_accounts() -> None:
+    """Create the first login accounts when the auth table is empty."""
+
+    if db.session.query(Account.id).first() is not None:
+        return
+
+    current_time = now_local()
+    account_specs = [
+        {
+            "id": "account-admin",
+            "username": "admin",
+            "password": "admin",
+            "role": "admin",
+            "member_id": None,
+            "display_name": "管理员",
+            "avatar": "管",
+        },
+        {
+            "id": "account-linqing",
+            "username": "linqing",
+            "password": "123456",
+            "role": "team_lead",
+            "member_id": "linqing",
+            "display_name": None,
+            "avatar": None,
+        },
+        {
+            "id": "account-zhouyi",
+            "username": "zhouyi",
+            "password": "123456",
+            "role": "team_lead",
+            "member_id": "zhouyi",
+            "display_name": None,
+            "avatar": None,
+        },
+        {
+            "id": "account-xuheng",
+            "username": "xuheng",
+            "password": "123456",
+            "role": "team_lead",
+            "member_id": "xuheng",
+            "display_name": None,
+            "avatar": None,
+        },
+        {
+            "id": "account-mina",
+            "username": "mina",
+            "password": "123456",
+            "role": "member",
+            "member_id": "mina",
+            "display_name": None,
+            "avatar": None,
+        },
+    ]
+
+    existing_member_ids = {
+        member_id
+        for (member_id,) in db.session.query(Member.id).filter(Member.id.in_(["linqing", "zhouyi", "xuheng", "mina"]))
+    }
+    accounts = []
+
+    for spec in account_specs:
+        member_id = spec["member_id"]
+        if member_id is not None and member_id not in existing_member_ids:
+            continue
+
+        accounts.append(
+            Account(
+                id=spec["id"],
+                username=spec["username"],
+                password_hash=generate_password_hash(spec["password"], method="pbkdf2:sha256"),
+                role=spec["role"],
+                display_name=spec["display_name"],
+                avatar=spec["avatar"],
+                member_id=member_id,
+                is_active=True,
+                created_at=current_time,
+                updated_at=current_time,
+            )
+        )
+
+    db.session.add_all(accounts)
+
+
+def _backfill_account_profiles() -> None:
+    """Fill profile fields for databases created before editable profiles."""
+
+    for account in db.session.query(Account).all():
+        if account.member is not None:
+            account.display_name = None
+            account.avatar = None
+            continue
+
+        if not account.display_name:
+            account.display_name = "管理员" if account.role == "admin" else account.username
+        if not account.avatar:
+            account.avatar = (account.display_name or account.username or "用")[:1]
+        account.updated_at = now_local()
+
+
+def _seed_missing_release_records() -> None:
+    """Append release records that are newer than an existing database seed."""
+
+    existing_versions = {version for (version,) in db.session.query(ReleaseRecord.version).all()}
+    missing_records = [
+        ReleaseRecord(**record)
+        for record in SEEDED_RELEASE_RECORDS
+        if record["version"] not in existing_versions
+    ]
+    db.session.add_all(missing_records)
+
+
 def seed_database() -> None:
     has_any_data = db.session.query(Team.id).first() is not None
     if has_any_data:
+        _seed_missing_release_records()
+        _seed_default_accounts()
+        _backfill_account_profiles()
+        db.session.commit()
         return
 
     teams = [
@@ -313,8 +471,7 @@ def seed_database() -> None:
     ]
     db.session.add_all(tasks)
 
-    releases = [ReleaseRecord(**record) for record in SEEDED_RELEASE_RECORDS]
-    db.session.add_all(releases)
+    _seed_missing_release_records()
 
     operations = [
         OperationRecord(
@@ -327,5 +484,6 @@ def seed_database() -> None:
         )
     ]
     db.session.add_all(operations)
+    _seed_default_accounts()
+    _backfill_account_profiles()
     db.session.commit()
-

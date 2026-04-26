@@ -1,24 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# End-to-end Docker smoke test.
+#
+# The script rebuilds and starts the same three-container stack that users will
+# deploy, then exercises the most important business flow through real HTTP
+# requests. It is deliberately broader than a health check but much faster than
+# a full manual QA pass.
+
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+WEB_PORT="${WEB_PORT:-8080}"
+API_PORT="${API_PORT:-8000}"
 
 bash "$ROOT_DIR/scripts/docker-up.sh"
 
-python3 <<'PY'
+WEB_PORT="$WEB_PORT" API_PORT="$API_PORT" python3 <<'PY'
 import json
+import os
 import sys
 import time
 import urllib.error
 import urllib.request
 
 
-def request(url: str, method: str = "GET", data=None):
+WEB_PORT = os.environ["WEB_PORT"]
+API_PORT = os.environ["API_PORT"]
+AUTH_TOKEN = None
+
+
+def request(url: str, method: str = "GET", data=None, auth: bool = True):
+    """Small stdlib HTTP helper so the smoke test has no Python dependencies."""
+
     payload = None
     headers = {}
     if data is not None:
         payload = json.dumps(data).encode("utf-8")
         headers["Content-Type"] = "application/json"
+    if auth and AUTH_TOKEN:
+        headers["Authorization"] = f"Bearer {AUTH_TOKEN}"
     req = urllib.request.Request(url, data=payload, headers=headers, method=method)
     with urllib.request.urlopen(req, timeout=10) as response:
         body = response.read()
@@ -30,7 +49,7 @@ def request(url: str, method: str = "GET", data=None):
 
 for _ in range(30):
     try:
-        health = request("http://127.0.0.1:8000/api/health")
+        health = request(f"http://127.0.0.1:{API_PORT}/api/health")
         if health.get("status") == "ok":
             break
     except Exception:
@@ -38,27 +57,39 @@ for _ in range(30):
 else:
     raise SystemExit("API 健康检查未通过")
 
-html = request("http://127.0.0.1:8080/")
+# Validate the static frontend and the Nginx `/api` reverse proxy before
+# running authenticated business operations.
+html = request(f"http://127.0.0.1:{WEB_PORT}/")
 if 'id="root"' not in html:
     raise SystemExit("前端首页未返回预期内容")
 
-proxied_health = request("http://127.0.0.1:8080/api/health")
+proxied_health = request(f"http://127.0.0.1:{WEB_PORT}/api/health")
 if proxied_health.get("status") != "ok":
     raise SystemExit("前端反向代理到 API 的链路异常")
 
-bootstrap = request("http://127.0.0.1:8000/api/bootstrap")
+login = request(
+    f"http://127.0.0.1:{API_PORT}/api/auth/login",
+    method="POST",
+    data={"username": "admin", "password": "admin"},
+    auth=False,
+)
+AUTH_TOKEN = login["token"]
+
+# CRUD path: create a team, member and task, then update and delete them. This
+# verifies API, database persistence, permissions, operation records and export.
+bootstrap = request(f"http://127.0.0.1:{API_PORT}/api/bootstrap")
 if bootstrap["summary"]["teamCount"] < 3:
     raise SystemExit("Bootstrap 返回的团队数量异常")
 
 team = request(
-    "http://127.0.0.1:8000/api/teams",
+    f"http://127.0.0.1:{API_PORT}/api/teams",
     method="POST",
     data={"name": "冒烟验证组", "lead": "测试同学", "color": "#14b8a6"},
 )
 team_id = team["item"]["id"]
 
 member = request(
-    "http://127.0.0.1:8000/api/members",
+    f"http://127.0.0.1:{API_PORT}/api/members",
     method="POST",
     data={
         "name": "测试同学",
@@ -71,7 +102,7 @@ member = request(
 member_id = member["item"]["id"]
 
 task = request(
-    "http://127.0.0.1:8000/api/tasks",
+    f"http://127.0.0.1:{API_PORT}/api/tasks",
     method="POST",
     data={
         "title": "容器冒烟验证",
@@ -88,7 +119,7 @@ task = request(
 task_id = task["item"]["id"]
 
 request(
-    f"http://127.0.0.1:8000/api/tasks/{task_id}",
+    f"http://127.0.0.1:{API_PORT}/api/tasks/{task_id}",
     method="PATCH",
     data={
         "progress": 60,
@@ -98,17 +129,17 @@ request(
     },
 )
 
-records = request("http://127.0.0.1:8000/api/operation-records?page=1&size=20")
+records = request(f"http://127.0.0.1:{API_PORT}/api/operation-records?page=1&size=20")
 if records["total"] < 4:
     raise SystemExit("操作记录数量异常")
 
-export_payload = request("http://127.0.0.1:8000/api/export/workspace")
+export_payload = request(f"http://127.0.0.1:{API_PORT}/api/export/workspace")
 if not any(item["id"] == task_id for item in export_payload["tasks"]):
     raise SystemExit("导出快照缺少新建任务")
 
-request(f"http://127.0.0.1:8000/api/tasks/{task_id}", method="DELETE")
-request(f"http://127.0.0.1:8000/api/members/{member_id}", method="DELETE")
-request(f"http://127.0.0.1:8000/api/teams/{team_id}", method="DELETE")
+request(f"http://127.0.0.1:{API_PORT}/api/tasks/{task_id}", method="DELETE")
+request(f"http://127.0.0.1:{API_PORT}/api/members/{member_id}", method="DELETE")
+request(f"http://127.0.0.1:{API_PORT}/api/teams/{team_id}", method="DELETE")
 
 print("Docker smoke test passed.")
 PY

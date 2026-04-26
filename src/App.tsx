@@ -1,4 +1,11 @@
-import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react'
+import type {
+  ChangeEvent as ReactChangeEvent,
+  CSSProperties,
+  FocusEvent as ReactFocusEvent,
+  FormEvent as ReactFormEvent,
+  MouseEvent as ReactMouseEvent,
+  UIEvent as ReactUIEvent,
+} from 'react'
 import {
   startTransition,
   useCallback,
@@ -19,14 +26,20 @@ import {
   deleteTeam as deleteTeamRequest,
   exportWorkspaceSnapshot,
   fetchBootstrap,
+  fetchCurrentAccount,
   fetchOperationRecords,
   fetchReleaseRecords,
+  getAuthToken,
+  login as loginRequest,
+  logout as logoutRequest,
+  type ApiAccount,
   type ApiMember,
   type ApiOperationRecord,
   type ApiReleaseRecord,
   type ApiTask,
   type ApiTeam,
   updateMember as updateMemberRequest,
+  updateCurrentProfile,
   updateTask as updateTaskRequest,
   updateTeam as updateTeamRequest,
 } from './api'
@@ -49,6 +62,7 @@ type Member = {
   role: string
   teamId: string
   avatar: string
+  avatarImageUrl: string | null
   capacityHours: number
   sortOrder: number
 }
@@ -85,6 +99,8 @@ type OperationRecord = {
   target: string
   detail: string
 }
+
+type Account = ApiAccount
 
 type Workspace = {
   teams: Team[]
@@ -154,6 +170,21 @@ type ResourceDeleteTarget = {
   name: string
 } | null
 
+type TaskTransferState = {
+  taskId: string
+  targetMemberId: string
+} | null
+
+type ProfileEditorState = {
+  displayName: string
+  avatar: string
+  avatarImagePreview: string | null
+  avatarImagePayload: string | null
+  avatarImageRemoved: boolean
+  newPassword: string
+  confirmPassword: string
+} | null
+
 type ResourcePanelTab = 'team' | 'member'
 
 type DragSelectionState = {
@@ -202,6 +233,12 @@ type TimelineBrowseState = {
   stepWidth: number
 } | null
 
+type FloatingTooltipState = {
+  text: string
+  x: number
+  y: number
+} | null
+
 type HolidayCalendarPeriodKind = 'holiday' | 'makeup-workday'
 
 type HolidayCalendarPeriod = {
@@ -232,6 +269,14 @@ type TimelineDay = {
   isMonthStart: boolean
 }
 
+type MemberTimelineRow = {
+  member: Member
+  tasks: Task[]
+  utilization: number
+  freeHours: number
+  rowHeight: number
+}
+
 type NavSection =
   | '总览'
   | '组织管理'
@@ -242,15 +287,57 @@ type RecordView = '更新记录' | '操作记录'
 type OverviewDurationFilter = '1天' | '2-3天' | '4-7天' | '8天以上'
 type OverviewFilterMenu = 'owner' | 'status' | 'priority' | 'duration' | null
 type TimelineFilterMenu = 'member' | 'holiday' | null
+type ThemePreference = 'system' | 'light' | 'dark'
+type AppliedTheme = 'light' | 'dark'
+type TimelineRangeMode = 'twoWeeks' | 'oneMonth'
 
 const STORAGE_KEY = 'human-gantt-workbench:v4'
+const THEME_STORAGE_KEY = 'resource-planning-theme'
+const BRAND_ICON_PATH = '/app-icon-20260426.svg'
+const AVATAR_UPLOAD_MAX_BYTES = 10 * 1024 * 1024
 const BASE_DATE = new Date()
-const TIMELINE_WINDOW_DAYS = 14
-const TIMELINE_WINDOW_STEP_DAYS = 7
+const TIMELINE_RANGE_CONFIG: Record<
+  TimelineRangeMode,
+  {
+    dayCount: number
+    label: string
+    helper: string
+    nextLabel: string
+    previousLabel: string
+    stepDays: number
+  }
+> = {
+  twoWeeks: {
+    dayCount: 14,
+    label: '双周',
+    helper: '14 天',
+    nextLabel: '下周',
+    previousLabel: '上周',
+    stepDays: 7,
+  },
+  oneMonth: {
+    dayCount: 30,
+    label: '一个月',
+    helper: '30 天',
+    nextLabel: '后 30 天',
+    previousLabel: '前 30 天',
+    stepDays: 30,
+  },
+}
+const TIMELINE_ROW_GAP = 12
+const TIMELINE_ROW_OVERSCAN_PX = 240
+const TIMELINE_VIRTUALIZATION_THRESHOLD = 40
 const OVERVIEW_PAGE_SIZE = 10
 const RECORD_PAGE_SIZE = 10
 const priorityOrder: Priority[] = ['P0', 'P1', 'P2', 'P3', 'P4', 'P5']
 const CURRENT_OPERATOR = '当前用户'
+const navPathMap: Record<NavSection, string> = {
+  总览: '/overview',
+  组织管理: '/organization',
+  资源排期: '/schedule',
+  记录中心: '/records',
+  账号管理: '/accounts',
+}
 
 type RecordCollectionState<T> = {
   items: T[]
@@ -277,6 +364,26 @@ const CHINA_OFFICIAL_HOLIDAY_CALENDAR_MAP_2026 = buildHolidayCalendarMap(
 )
 
 const SEEDED_UPDATE_RECORDS: ReleaseRecord[] = [
+  {
+    id: 'release-14',
+    version: 'v1.7.1',
+    updatedAt: '2026/04/26 12:20',
+    features: [
+      '新建成员时自动创建登录账号，初始密码统一为 123456，并在组织管理保存后直接提示账号信息。',
+      '底部当前账号卡片支持点击打开个人资料弹窗，可修改姓名、头像文字和自己的登录密码。',
+      '个人资料保存会同步成员档案、团队负责人名称和操作记录，避免账号信息与排期成员信息不一致。',
+    ],
+  },
+  {
+    id: 'release-13',
+    version: 'v1.7.0',
+    updatedAt: '2026/04/26 10:30',
+    features: [
+      '新增账号登录与角色权限体系，管理员账号拥有全部操作能力，成员账号与人员档案绑定。',
+      '组织管理入口仅对管理员与团队负责人开放，团队与成员写入接口同步加入后端权限校验。',
+      '导航支持独立页面地址，修复总览 tooltip 被遮挡和浏览器标签图标缓存不更新的问题。',
+    ],
+  },
   {
     id: 'release-12',
     version: 'v1.6.3',
@@ -469,6 +576,7 @@ const defaultWorkspace: Workspace = {
       role: '产品负责人',
       teamId: 'strategy',
       avatar: '林',
+      avatarImageUrl: null,
       capacityHours: 40,
       sortOrder: 0,
     },
@@ -478,6 +586,7 @@ const defaultWorkspace: Workspace = {
       role: '项目运营',
       teamId: 'strategy',
       avatar: '米',
+      avatarImageUrl: null,
       capacityHours: 36,
       sortOrder: 1,
     },
@@ -487,6 +596,7 @@ const defaultWorkspace: Workspace = {
       role: '设计负责人',
       teamId: 'design',
       avatar: '周',
+      avatarImageUrl: null,
       capacityHours: 40,
       sortOrder: 2,
     },
@@ -496,6 +606,7 @@ const defaultWorkspace: Workspace = {
       role: '前端工程师',
       teamId: 'delivery',
       avatar: '许',
+      avatarImageUrl: null,
       capacityHours: 44,
       sortOrder: 3,
     },
@@ -685,6 +796,7 @@ function mapApiMemberToMember(member: ApiMember): Member {
     role: member.role,
     teamId: member.teamId,
     avatar: member.avatar,
+    avatarImageUrl: member.avatarImageUrl,
     capacityHours: member.capacityHours,
     sortOrder: member.sortOrder,
   }
@@ -1132,6 +1244,81 @@ function buildAvatarLabel(name: string) {
   return name.trim().charAt(0) || '新'
 }
 
+function AvatarBubble({
+  className,
+  imageUrl,
+  label,
+}: {
+  className: string
+  imageUrl?: string | null
+  label: string
+}) {
+  return (
+    <span className={`avatar-bubble ${className}`} aria-hidden="true">
+      {imageUrl ? <img src={imageUrl} alt="" loading="lazy" decoding="async" /> : label}
+    </span>
+  )
+}
+
+function getTimelineRowHeight(taskCount: number) {
+  // The timeline uses one visual lane per task. Converting that into a stable
+  // estimated row height lets us window off-screen rows and keep the DOM small
+  // when the resource list becomes large.
+  return Math.max(70, taskCount * 40 + 20)
+}
+
+function isThemePreference(value: string | null): value is ThemePreference {
+  return value === 'system' || value === 'light' || value === 'dark'
+}
+
+function getInitialThemePreference(): ThemePreference {
+  if (typeof window === 'undefined') {
+    return 'system'
+  }
+
+  const storedPreference = window.localStorage.getItem(THEME_STORAGE_KEY)
+  return isThemePreference(storedPreference) ? storedPreference : 'system'
+}
+
+function getInitialSystemPrefersDark() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false
+  }
+
+  return window.matchMedia('(prefers-color-scheme: dark)').matches
+}
+
+function getNavFromPath(pathname: string): NavSection {
+  const normalizedPath = pathname.replace(/\/+$/, '') || '/'
+  const matchedEntry = Object.entries(navPathMap).find(([, path]) => path === normalizedPath)
+
+  if (matchedEntry) {
+    return matchedEntry[0] as NavSection
+  }
+
+  return '资源排期'
+}
+
+function getInitialActiveNav(): NavSection {
+  if (typeof window === 'undefined') {
+    return '资源排期'
+  }
+
+  return getNavFromPath(window.location.pathname)
+}
+
+function getAccountRoleLabel(account: Account) {
+  if (account.role === 'admin') {
+    return '管理员'
+  }
+
+  if (account.role === 'team_lead') {
+    return '团队负责人'
+  }
+
+  return '成员'
+}
+
 function App() {
   const [workspace, setWorkspace] = useState<Workspace>(() => cloneDefaultWorkspace())
   const [releaseRecordState, setReleaseRecordState] = useState<RecordCollectionState<ReleaseRecord>>({
@@ -1147,11 +1334,21 @@ function App() {
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true)
   const [isExporting, setIsExporting] = useState(false)
-  const [activeNav, setActiveNav] = useState<NavSection>('资源排期')
+  const [currentAccount, setCurrentAccount] = useState<Account | null>(null)
+  const [isAuthChecking, setIsAuthChecking] = useState(() => Boolean(getAuthToken()))
+  const [loginUsername, setLoginUsername] = useState('admin')
+  const [loginPassword, setLoginPassword] = useState('admin')
+  const [loginError, setLoginError] = useState<string | null>(null)
+  const [isLoginSubmitting, setIsLoginSubmitting] = useState(false)
+  const [profileEditor, setProfileEditor] = useState<ProfileEditorState>(null)
+  const [profileNotice, setProfileNotice] = useState<ResourceNoticeState>(null)
+  const [isProfileSaving, setIsProfileSaving] = useState(false)
+  const [activeNav, setActiveNav] = useState<NavSection>(() => getInitialActiveNav())
   const [recordView, setRecordView] = useState<RecordView>('更新记录')
   const [recordPage, setRecordPage] = useState(1)
   const [selectedTaskId, setSelectedTaskId] = useState(() => defaultWorkspace.tasks[0].id)
   const [overviewPage, setOverviewPage] = useState(1)
+  const [timelineRangeMode, setTimelineRangeMode] = useState<TimelineRangeMode>('twoWeeks')
   const [teamFilter, setTeamFilter] = useState('全部团队')
   const [statusFilter, setStatusFilter] = useState<'全部状态' | Status>('全部状态')
   const [timelineMemberFilter, setTimelineMemberFilter] = useState<string[]>([])
@@ -1176,6 +1373,8 @@ function App() {
   const [memberEditor, setMemberEditor] = useState<MemberEditorState>(null)
   const [resourceNotice, setResourceNotice] = useState<ResourceNoticeState>(null)
   const [resourceDeleteTarget, setResourceDeleteTarget] = useState<ResourceDeleteTarget>(null)
+  const [taskTransfer, setTaskTransfer] = useState<TaskTransferState>(null)
+  const [isTaskTransferSaving, setIsTaskTransferSaving] = useState(false)
   const [resourcePanelTab, setResourcePanelTab] = useState<ResourcePanelTab>('team')
   const [resourceSearchValue, setResourceSearchValue] = useState('')
   const [selectedResourceTeamId, setSelectedResourceTeamId] = useState(
@@ -1190,6 +1389,11 @@ function App() {
   const [memberRowReorder, setMemberRowReorder] = useState<MemberRowReorderState>(null)
   const [pendingTaskCoachId, setPendingTaskCoachId] = useState<string | null>(null)
   const [taskCoach, setTaskCoach] = useState<TaskCoachState>(null)
+  const [timelineScrollTop, setTimelineScrollTop] = useState(0)
+  const [timelineViewportHeight, setTimelineViewportHeight] = useState(0)
+  const [themePreference, setThemePreference] = useState<ThemePreference>(() => getInitialThemePreference())
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() => getInitialSystemPrefersDark())
+  const [floatingTooltip, setFloatingTooltip] = useState<FloatingTooltipState>(null)
   const deferredSearch = useDeferredValue(searchValue)
   const dragSelectionRef = useRef<DragSelectionState>(null)
   const taskTimelineInteractionRef = useRef<TaskTimelineInteractionState>(null)
@@ -1198,6 +1402,7 @@ function App() {
   const overviewFilterBarRef = useRef<HTMLDivElement | null>(null)
   const timelineFilterBarRef = useRef<HTMLDivElement | null>(null)
   const timelineGestureRegionRef = useRef<HTMLDivElement | null>(null)
+  const timelineBodyScrollRef = useRef<HTMLDivElement | null>(null)
   const timelineLaneRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const timelineRowRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const timelineLaneMemberIdsRef = useRef<string[]>([])
@@ -1206,6 +1411,171 @@ function App() {
   const hasUsedTimelineGestureRef = useRef(false)
   const timelineBrowseRef = useRef<TimelineBrowseState>(null)
   const wheelMonthSwitchRef = useRef({ delta: 0, lastAt: 0 })
+  const profileAvatarInputRef = useRef<HTMLInputElement | null>(null)
+  const appliedTheme: AppliedTheme = themePreference === 'system' ? (systemPrefersDark ? 'dark' : 'light') : themePreference
+  const themeModeSummary =
+    themePreference === 'system'
+      ? `系统 · ${appliedTheme === 'dark' ? '暗夜' : '浅色'}`
+      : themePreference === 'dark'
+        ? '手动 · 暗夜'
+        : '手动 · 浅色'
+  const canManageOrganization = currentAccount?.permissions.canManageOrganization ?? false
+  const accountRoleLabel = currentAccount ? getAccountRoleLabel(currentAccount) : ''
+  const isRecordsPage = activeNav === '记录中心'
+  const isResourceManagementPage = activeNav === '组织管理'
+  const isResourceTimelinePage = activeNav === '资源排期'
+  const isOverviewPage =
+    !isRecordsPage && !isResourceTimelinePage && !isResourceManagementPage
+  const isDraggingSelection = dragSelection !== null
+  const isTaskTimelineInteracting = taskTimelineInteraction !== null
+  const isMemberRowReordering = memberRowReorder !== null
+  const syncTimelineViewportMetrics = useEffectEvent(() => {
+    const scrollElement = timelineBodyScrollRef.current
+    if (!scrollElement) {
+      return
+    }
+
+    setTimelineViewportHeight(scrollElement.clientHeight)
+    setTimelineScrollTop(scrollElement.scrollTop)
+  })
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+    const handleChange = (event: MediaQueryListEvent) => {
+      setSystemPrefersDark(event.matches)
+    }
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleChange)
+      return () => mediaQuery.removeEventListener('change', handleChange)
+    }
+
+    mediaQuery.addListener(handleChange)
+    return () => mediaQuery.removeListener(handleChange)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.localStorage.setItem(THEME_STORAGE_KEY, themePreference)
+  }, [themePreference])
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = appliedTheme
+    document.body.dataset.theme = appliedTheme
+    document.documentElement.style.colorScheme = appliedTheme
+  }, [appliedTheme])
+
+  useEffect(() => {
+    // Some Chromium builds aggressively cache favicon resources per tab/origin.
+    // Rewriting the icon tags at runtime gives the active tab a fresh URL and
+    // forces the browser to repaint the small tab icon instead of keeping the
+    // previous RG bitmap in memory.
+    const iconHref = `${BRAND_ICON_PATH}?ts=${Date.now()}`
+    const head = document.head
+    const upsertIconLink = (rel: string) => {
+      let link = head.querySelector(`link[rel="${rel}"]`) as HTMLLinkElement | null
+
+      if (!link) {
+        link = document.createElement('link')
+        link.rel = rel
+        head.appendChild(link)
+      }
+
+      link.type = 'image/svg+xml'
+      link.href = iconHref
+    }
+
+    upsertIconLink('icon')
+    upsertIconLink('shortcut icon')
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const restoreAccountSession = async () => {
+      if (!getAuthToken()) {
+        setIsAuthChecking(false)
+        setIsWorkspaceLoading(false)
+        return
+      }
+
+      try {
+        const payload = await fetchCurrentAccount()
+        if (!cancelled) {
+          setCurrentAccount(payload.account)
+          if (
+            typeof window !== 'undefined' &&
+            getNavFromPath(window.location.pathname) === '组织管理' &&
+            !payload.account.permissions.canManageOrganization
+          ) {
+            window.history.replaceState({}, '', navPathMap['资源排期'])
+            setActiveNav('资源排期')
+          }
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLoginError(error instanceof Error ? error.message : '登录状态已过期，请重新登录。')
+          setCurrentAccount(null)
+          setIsWorkspaceLoading(false)
+        }
+      } finally {
+        if (!cancelled) {
+          setIsAuthChecking(false)
+        }
+      }
+    }
+
+    void restoreAccountSession()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isResourceTimelinePage) {
+      return
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      syncTimelineViewportMetrics()
+    })
+    const scrollElement = timelineBodyScrollRef.current
+    let resizeObserver: ResizeObserver | null = null
+
+    if (scrollElement && typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        syncTimelineViewportMetrics()
+      })
+      resizeObserver.observe(scrollElement)
+    }
+
+    const handleWindowResize = () => {
+      syncTimelineViewportMetrics()
+    }
+
+    window.addEventListener('resize', handleWindowResize)
+
+    return () => {
+      window.cancelAnimationFrame(frameId)
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', handleWindowResize)
+    }
+  }, [
+    isMemberRowReordering,
+    isResourceTimelinePage,
+    isTaskTimelineInteracting,
+    timelineMemberFilter.length,
+    workspace.members.length,
+    workspace.tasks.length,
+  ])
 
   const applyBootstrapPayload = useCallback((payload: Awaited<ReturnType<typeof fetchBootstrap>>) => {
     setWorkspace((current) => ({
@@ -1237,6 +1607,11 @@ function App() {
   }, [])
 
   const refreshWorkspace = useCallback(async () => {
+    if (!currentAccount) {
+      setIsWorkspaceLoading(false)
+      return
+    }
+
     try {
       setWorkspaceError(null)
       const payload = await fetchBootstrap()
@@ -1246,7 +1621,7 @@ function App() {
     } finally {
       setIsWorkspaceLoading(false)
     }
-  }, [applyBootstrapPayload])
+  }, [applyBootstrapPayload, currentAccount])
 
   const refreshRecordPage = async (nextView: RecordView, nextPage: number) => {
     try {
@@ -1273,7 +1648,7 @@ function App() {
   const recordViewAction = async (target: string, detail: string) => {
     try {
       await createViewOperationRecord({
-        actor: CURRENT_OPERATOR,
+        actor: currentAccount?.displayName ?? CURRENT_OPERATOR,
         target,
         detail,
       })
@@ -1287,9 +1662,14 @@ function App() {
   }
 
   useEffect(() => {
+    if (!currentAccount) {
+      return
+    }
+
     let cancelled = false
 
     const loadWorkspace = async () => {
+      setIsWorkspaceLoading(true)
       try {
         setWorkspaceError(null)
         const payload = await fetchBootstrap()
@@ -1313,7 +1693,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [applyBootstrapPayload])
+  }, [applyBootstrapPayload, currentAccount])
 
   useEffect(() => {
     const closeContextMenu = () => setContextMenu(null)
@@ -1327,6 +1707,8 @@ function App() {
         setMemberEditor(null)
         setResourceNotice(null)
         setResourceDeleteTarget(null)
+        setProfileEditor(null)
+        setProfileNotice(null)
         setIsDateJumpOpen(false)
         setTimelineFilterMenu(null)
         dragSelectionRef.current = null
@@ -1454,6 +1836,15 @@ function App() {
     () => Object.fromEntries(workspace.members.map((member) => [member.id, member])),
     [workspace.members],
   )
+  const memberCountsByTeam = useMemo(() => {
+    const counts: Record<string, number> = {}
+
+    for (const member of workspace.members) {
+      counts[member.teamId] = (counts[member.teamId] ?? 0) + 1
+    }
+
+    return counts
+  }, [workspace.members])
   const tasksSnapshot = useMemo(() => {
     if (!taskTimelineInteraction) {
       return workspace.tasks
@@ -1471,35 +1862,56 @@ function App() {
         : task,
     )
   }, [taskTimelineInteraction, workspace.tasks])
+  const taskAnalytics = useMemo(() => {
+    // Aggregate once, then let overview cards, org panels and the timeline all
+    // reuse the same maps instead of repeatedly filtering the full task list.
+    const taskCountsByTeam: Record<string, number> = {}
+    const taskCountsByOwner: Record<string, number> = {}
+    let riskTaskCount = 0
+    let activeTaskCount = 0
+
+    for (const task of tasksSnapshot) {
+      taskCountsByTeam[task.teamId] = (taskCountsByTeam[task.teamId] ?? 0) + 1
+      taskCountsByOwner[task.ownerId] = (taskCountsByOwner[task.ownerId] ?? 0) + 1
+
+      if (task.status === '风险') {
+        riskTaskCount += 1
+      }
+
+      if (task.status === '进行中') {
+        activeTaskCount += 1
+      }
+    }
+
+    return {
+      taskCountsByTeam,
+      taskCountsByOwner,
+      riskTaskCount,
+      activeTaskCount,
+    }
+  }, [tasksSnapshot])
   const teamStats = useMemo(
     () =>
       Object.fromEntries(
         workspace.teams.map((team) => [
           team.id,
           {
-            memberCount: workspace.members.filter((member) => member.teamId === team.id).length,
-            taskCount: tasksSnapshot.filter((task) => task.teamId === team.id).length,
+            memberCount: memberCountsByTeam[team.id] ?? 0,
+            taskCount: taskAnalytics.taskCountsByTeam[team.id] ?? 0,
           },
         ]),
       ),
-    [tasksSnapshot, workspace.members, workspace.teams],
+    [memberCountsByTeam, taskAnalytics.taskCountsByTeam, workspace.teams],
   )
-  const memberTaskCounts = useMemo(
-    () =>
-      Object.fromEntries(
-        workspace.members.map((member) => [
-          member.id,
-          tasksSnapshot.filter((task) => task.ownerId === member.id).length,
-        ]),
-      ),
-    [tasksSnapshot, workspace.members],
-  )
+  const memberTaskCounts = taskAnalytics.taskCountsByOwner
 
   const visibleMonthStart = useMemo(
     () => normalizeDate(timelineStartDate),
     [timelineStartDate],
   )
-  const timelineWindowDayCount = TIMELINE_WINDOW_DAYS
+  const timelineRangeConfig = TIMELINE_RANGE_CONFIG[timelineRangeMode]
+  const timelineWindowDayCount = timelineRangeConfig.dayCount
+  const timelineWindowStepDays = timelineRangeConfig.stepDays
   const visibleMonthEnd = useMemo(
     () => addCalendarDays(visibleMonthStart, timelineWindowDayCount - 1),
     [timelineWindowDayCount, visibleMonthStart],
@@ -1532,7 +1944,7 @@ function App() {
   const isTodayVisible = todayDayIndex >= 0 && todayDayIndex < timelineDays.length
   const timelineStyle = {
     '--days': timelineDays.length,
-    '--day-size': 'clamp(38px, 2.9vw, 46px)',
+    '--day-size': timelineRangeMode === 'oneMonth' ? 'clamp(28px, 2.1vw, 36px)' : 'clamp(38px, 2.9vw, 46px)',
     '--name-col': 'clamp(78px, 7vw, 94px)',
     '--focused-left': `${isFocusedDateVisible ? (focusedDayIndex / timelineDays.length) * 100 : 0}%`,
     '--focused-width': `${100 / timelineDays.length}%`,
@@ -1628,6 +2040,10 @@ function App() {
   const overviewDurationSummary =
     overviewDurationFilter.length === 0 ? '全部周期' : `周期 ${overviewDurationFilter.length}`
   const overviewTasks = useMemo(() => {
+    const ownerFilterSet = new Set(overviewOwnerFilter)
+    const statusFilterSet = new Set(overviewStatusFilter)
+    const priorityFilterSet = new Set(overviewPriorityFilter)
+
     return tasksSnapshot
       .filter((task) => {
         const member = membersById[task.ownerId]
@@ -1637,12 +2053,10 @@ function App() {
           member?.name.toLowerCase().includes(normalizedSearch)
 
         const matchesTeam = teamFilter === '全部团队' || task.teamId === teamFilter
-        const matchesOwner =
-          overviewOwnerFilter.length === 0 || overviewOwnerFilter.includes(task.ownerId)
-        const matchesStatus =
-          overviewStatusFilter.length === 0 || overviewStatusFilter.includes(task.status)
+        const matchesOwner = ownerFilterSet.size === 0 || ownerFilterSet.has(task.ownerId)
+        const matchesStatus = statusFilterSet.size === 0 || statusFilterSet.has(task.status)
         const matchesPriority =
-          overviewPriorityFilter.length === 0 || overviewPriorityFilter.includes(task.priority)
+          priorityFilterSet.size === 0 || priorityFilterSet.has(task.priority)
         const matchesDuration =
           overviewDurationFilter.length === 0 ||
           overviewDurationFilter.some((filter) => matchesOverviewDuration(task.duration, filter))
@@ -1754,19 +2168,38 @@ function App() {
       ganttTasks.filter((task) => taskOverlapsWindow(task, visibleMonthStart, visibleMonthEnd)),
     [ganttTasks, visibleMonthEnd, visibleMonthStart],
   )
+  const visibleMonthAnalytics = useMemo(() => {
+    const tasksByOwner: Record<string, Task[]> = {}
+    const bookedHoursByOwner: Record<string, number> = {}
+    const taskCountByOwner: Record<string, number> = {}
 
-  const memberRows = useMemo(() => {
+    for (const task of visibleMonthTasks) {
+      if (!tasksByOwner[task.ownerId]) {
+        tasksByOwner[task.ownerId] = []
+      }
+
+      tasksByOwner[task.ownerId].push(task)
+      bookedHoursByOwner[task.ownerId] = (bookedHoursByOwner[task.ownerId] ?? 0) + task.duration * 4
+      taskCountByOwner[task.ownerId] = (taskCountByOwner[task.ownerId] ?? 0) + 1
+    }
+
+    return {
+      tasksByOwner,
+      bookedHoursByOwner,
+      taskCountByOwner,
+    }
+  }, [visibleMonthTasks])
+  const memberRows = useMemo<MemberTimelineRow[]>(() => {
+    const visibleMemberFilterSet = new Set(effectiveTimelineMemberFilter)
+
     return workspace.members
       .filter(
         (member) =>
-          effectiveTimelineMemberFilter.length === 0 ||
-          effectiveTimelineMemberFilter.includes(member.id),
+          visibleMemberFilterSet.size === 0 || visibleMemberFilterSet.has(member.id),
       )
       .map((member) => {
-        const tasks = visibleMonthTasks.filter((task) => task.ownerId === member.id)
-        const visibleMonthBookedHours = visibleMonthTasks
-          .filter((task) => task.ownerId === member.id)
-          .reduce((sum, task) => sum + task.duration * 4, 0)
+        const tasks = visibleMonthAnalytics.tasksByOwner[member.id] ?? []
+        const visibleMonthBookedHours = visibleMonthAnalytics.bookedHoursByOwner[member.id] ?? 0
         const utilization = Math.min(
           100,
           Math.round((visibleMonthBookedHours / Math.max(member.capacityHours, 1)) * 100),
@@ -1777,30 +2210,76 @@ function App() {
           tasks,
           utilization,
           freeHours: Math.max(0, member.capacityHours - visibleMonthBookedHours),
+          rowHeight: getTimelineRowHeight(tasks.length),
         }
       })
-  }, [effectiveTimelineMemberFilter, visibleMonthTasks, workspace.members])
+  }, [effectiveTimelineMemberFilter, visibleMonthAnalytics.bookedHoursByOwner, visibleMonthAnalytics.tasksByOwner, workspace.members])
 
   useEffect(() => {
     timelineLaneMemberIdsRef.current = memberRows.map((row) => row.member.id)
     timelineVisibleMemberIdsRef.current = memberRows.map((row) => row.member.id)
   }, [memberRows])
 
-  const riskTasks = tasksSnapshot.filter((task) => task.status === '风险')
-  const activeTasks = tasksSnapshot.filter((task) => task.status === '进行中')
+  const shouldVirtualizeTimelineRows =
+    memberRows.length >= TIMELINE_VIRTUALIZATION_THRESHOLD &&
+    !isDraggingSelection &&
+    !isTaskTimelineInteracting &&
+    !isMemberRowReordering
+  const totalTimelineContentHeight = useMemo(
+    () => memberRows.reduce((sum, row) => sum + row.rowHeight + TIMELINE_ROW_GAP, 0),
+    [memberRows],
+  )
+  const timelineVisibleWindow = useMemo(() => {
+    // Keep only the rows around the current scroll position mounted in the DOM.
+    // When the dataset grows, this cuts down layout work and avoids thousands of
+    // off-screen task bars consuming browser memory.
+    if (!shouldVirtualizeTimelineRows || timelineViewportHeight <= 0) {
+      return {
+        beforeHeight: 0,
+        afterHeight: 0,
+        rows: memberRows.map((row, index) => ({ row, absoluteIndex: index })),
+      }
+    }
+
+    const viewportStart = Math.max(0, timelineScrollTop - TIMELINE_ROW_OVERSCAN_PX)
+    const viewportEnd = timelineScrollTop + timelineViewportHeight + TIMELINE_ROW_OVERSCAN_PX
+    let startIndex = 0
+    let beforeHeight = 0
+
+    while (startIndex < memberRows.length) {
+      const nextHeight = memberRows[startIndex].rowHeight + TIMELINE_ROW_GAP
+      if (beforeHeight + nextHeight >= viewportStart) {
+        break
+      }
+
+      beforeHeight += nextHeight
+      startIndex += 1
+    }
+
+    let renderedHeight = 0
+    let endIndex = startIndex
+
+    while (endIndex < memberRows.length && beforeHeight + renderedHeight <= viewportEnd) {
+      renderedHeight += memberRows[endIndex].rowHeight + TIMELINE_ROW_GAP
+      endIndex += 1
+    }
+
+    return {
+      beforeHeight,
+      afterHeight: Math.max(0, totalTimelineContentHeight - beforeHeight - renderedHeight),
+      rows: memberRows
+        .slice(startIndex, endIndex)
+        .map((row, index) => ({ row, absoluteIndex: startIndex + index })),
+    }
+  }, [memberRows, shouldVirtualizeTimelineRows, timelineScrollTop, timelineViewportHeight, totalTimelineContentHeight])
+
+  const riskTaskCount = taskAnalytics.riskTaskCount
+  const activeTaskCount = taskAnalytics.activeTaskCount
   const visibleMonthLabel = formatTimelineHeading(visibleMonthStart, visibleMonthEnd)
   const visibleMonthRange = formatTimelineRangeLabel(visibleMonthStart, visibleMonthEnd)
   const defaultTimelineStartDate = startOfWeek(BASE_DATE)
   const isCurrentTimelineWindow =
     diffCalendarDays(visibleMonthStart, defaultTimelineStartDate) === 0
-  const isDraggingSelection = dragSelection !== null
-  const isTaskTimelineInteracting = taskTimelineInteraction !== null
-  const isMemberRowReordering = memberRowReorder !== null
-  const isRecordsPage = activeNav === '记录中心'
-  const isResourceManagementPage = activeNav === '组织管理'
-  const isResourceTimelinePage = activeNav === '资源排期'
-  const isOverviewPage =
-    !isRecordsPage && !isResourceTimelinePage && !isResourceManagementPage
   const normalizedResourceSearch = resourceSearchValue.trim().toLowerCase()
   const filteredResourceTeams = useMemo(
     () =>
@@ -1897,6 +2376,21 @@ function App() {
         ? workspace.tasks.filter((task) => task.ownerId === activeResourceMember.id)
         : [],
     [activeResourceMember, workspace.tasks],
+  )
+  const transferTask = taskTransfer
+    ? workspace.tasks.find((task) => task.id === taskTransfer.taskId) ?? null
+    : null
+  const transferCurrentOwner = transferTask ? membersById[transferTask.ownerId] ?? null : null
+  const transferTargetMember = taskTransfer
+    ? membersById[taskTransfer.targetMemberId] ?? null
+    : null
+  const transferTargetTeam = transferTargetMember ? teamsById[transferTargetMember.teamId] ?? null : null
+  const transferCandidateMembers = useMemo(
+    () =>
+      transferTask
+        ? workspace.members.filter((member) => member.id !== transferTask.ownerId)
+        : workspace.members,
+    [transferTask, workspace.members],
   )
   const activeResourcePanelTitle = resourcePanelTab === 'team' ? '团队目录' : '成员目录'
   const activeResourcePanelCopy =
@@ -2022,7 +2516,7 @@ function App() {
   }
 
   const shiftTimelineWindow = (delta: number) => {
-    const nextWindowStart = addCalendarDays(visibleMonthStart, delta * TIMELINE_WINDOW_STEP_DAYS)
+    const nextWindowStart = addCalendarDays(visibleMonthStart, delta * timelineWindowStepDays)
     setPendingDateValue(formatDateInputValue(nextWindowStart))
     setTimelineStartDate(nextWindowStart)
     setIsDateJumpOpen(false)
@@ -2231,13 +2725,58 @@ function App() {
     }
   }, [activeNav])
 
+  const navigateToNav = useCallback(
+    (nextNav: NavSection, options?: { replace?: boolean }) => {
+      const resolvedNav = nextNav === '组织管理' && !canManageOrganization ? '资源排期' : nextNav
+
+      setActiveNav(resolvedNav)
+
+      if (typeof window === 'undefined') {
+        return
+      }
+
+      const nextPath = navPathMap[resolvedNav]
+      if (window.location.pathname === nextPath) {
+        return
+      }
+
+      if (options?.replace) {
+        window.history.replaceState({}, '', nextPath)
+        return
+      }
+
+      window.history.pushState({}, '', nextPath)
+    },
+    [canManageOrganization],
+  )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const handlePopState = () => {
+      const nextNav = getNavFromPath(window.location.pathname)
+      if (nextNav === '组织管理' && !canManageOrganization) {
+        setActiveNav('资源排期')
+        return
+      }
+      setActiveNav(nextNav)
+    }
+
+    window.addEventListener('popstate', handlePopState)
+    return () => {
+      window.removeEventListener('popstate', handlePopState)
+    }
+  }, [canManageOrganization])
+
   const openRecordsCenter = (nextView: RecordView) => {
     setContextMenu(null)
     setPendingTaskCoachId(null)
     setTaskCoach(null)
     setRecordView(nextView)
     setRecordPage(1)
-    setActiveNav('记录中心')
+    navigateToNav('记录中心')
     void recordViewAction('记录中心', `打开了${nextView}页面。`)
   }
 
@@ -2401,6 +2940,12 @@ function App() {
   }
 
   const openResourceModal = () => {
+    if (!canManageOrganization) {
+      setWorkspaceError('当前账号没有组织管理权限，请联系管理员或团队负责人。')
+      navigateToNav('资源排期')
+      return
+    }
+
     setContextMenu(null)
     setResourceNotice(null)
     setTeamEditor(null)
@@ -2408,7 +2953,7 @@ function App() {
     setResourceSearchValue('')
     setResourceDeleteTarget(null)
     setResourcePanelTab('team')
-    setActiveNav('组织管理')
+    navigateToNav('组织管理')
     void recordViewAction('组织管理', '打开了团队与成员管理页面。')
   }
 
@@ -2487,6 +3032,92 @@ function App() {
     setResourcePanelTab('member')
     setSelectedResourceMemberId(memberId)
     setMemberEditor(null)
+  }
+
+  const openTaskTransfer = (taskId: string) => {
+    const task = workspace.tasks.find((item) => item.id === taskId)
+    if (!task) {
+      return
+    }
+
+    const firstCandidate = workspace.members.find((member) => member.id !== task.ownerId)
+    setResourceNotice(null)
+    setTaskTransfer({
+      taskId,
+      targetMemberId: firstCandidate?.id ?? task.ownerId,
+    })
+  }
+
+  const saveTaskTransfer = async () => {
+    if (!taskTransfer || !transferTask || !transferTargetMember) {
+      setResourceNotice({ tone: 'danger', message: '请选择要转交的项目和新负责人。' })
+      return
+    }
+
+    if (transferTask.ownerId === transferTargetMember.id) {
+      setResourceNotice({ tone: 'danger', message: '新负责人不能与当前负责人相同。' })
+      return
+    }
+
+    const previousOwner = membersById[transferTask.ownerId]
+    const targetTeam = teamsById[transferTargetMember.teamId]
+    const remainingTasks = workspace.tasks.filter((task) => task.id !== transferTask.id)
+    const targetOwnerTaskIndices = remainingTasks.reduce<number[]>((indices, task, index) => {
+      if (task.ownerId === transferTargetMember.id) {
+        indices.push(index)
+      }
+      return indices
+    }, [])
+    const insertIndex =
+      targetOwnerTaskIndices.length > 0
+        ? targetOwnerTaskIndices[targetOwnerTaskIndices.length - 1] + 1
+        : remainingTasks.length
+    const operationDetail = `已将项目从 ${previousOwner?.name ?? '原负责人'} 转交给 ${transferTargetMember.name}，所属团队同步为 ${targetTeam?.name ?? '新负责人团队'}。`
+
+    setIsTaskTransferSaving(true)
+    setResourceNotice(null)
+    setWorkspace((current) => ({
+      ...current,
+      tasks: [
+        ...remainingTasks.slice(0, insertIndex),
+        {
+          ...transferTask,
+          ownerId: transferTargetMember.id,
+          teamId: transferTargetMember.teamId,
+          sortOrder: insertIndex,
+          updatedAt: formatTimeLabel(),
+        },
+        ...remainingTasks.slice(insertIndex),
+      ].map((task, index) => ({
+        ...task,
+        sortOrder: index,
+      })),
+    }))
+
+    try {
+      await updateTaskRequest(transferTask.id, {
+        ownerId: transferTargetMember.id,
+        sortOrder: insertIndex,
+        operationDetail,
+      })
+      setTaskTransfer(null)
+      setResourcePanelTab('member')
+      setSelectedResourceMemberId(transferTargetMember.id)
+      setSelectedTaskId(transferTask.id)
+      setResourceNotice({
+        tone: 'success',
+        message: `项目“${transferTask.title}”已转交给 ${transferTargetMember.name}。`,
+      })
+      await refreshWorkspace()
+    } catch (error) {
+      setResourceNotice({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '项目转交失败，请稍后重试。',
+      })
+      await refreshWorkspace()
+    } finally {
+      setIsTaskTransferSaving(false)
+    }
   }
 
   const openTeamDeleteConfirm = (teamId: string) => {
@@ -2615,7 +3246,7 @@ function App() {
         setSelectedResourceMemberId(response.item.id)
         setResourceNotice({
           tone: 'success',
-          message: `成员“${response.item.name}”创建成功。`,
+          message: `成员“${response.item.name}”创建成功，登录账号：${response.accountUsername}，初始密码：${response.defaultPassword}。`,
         })
       } else if (memberEditor.memberId) {
         await updateMemberRequest(memberEditor.memberId, draft)
@@ -2829,15 +3460,15 @@ function App() {
           const rect = laneElement.getBoundingClientRect()
           if (event.clientY >= rect.top && event.clientY <= rect.bottom) {
             hoveredOwner = membersById[memberId] ?? null
+            const visibleTaskCountForOwner = visibleMonthAnalytics.taskCountByOwner[memberId] ?? 0
+            const taskCountWithoutMovingTask =
+              visibleTaskCountForOwner -
+              (currentInteraction.originalOwnerId === memberId ? 1 : 0)
+
             previewLaneIndex = resolveLaneIndexFromPointer(
               event.clientY,
               rect.top,
-              workspace.tasks.filter(
-                (task) =>
-                  task.id !== currentInteraction.taskId &&
-                  task.ownerId === memberId &&
-                  taskOverlapsWindow(task, visibleMonthStart, visibleMonthEnd),
-              ).length,
+              Math.max(0, taskCountWithoutMovingTask),
             )
             break
           }
@@ -3026,7 +3657,7 @@ function App() {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [isTaskTimelineInteracting, membersById, refreshWorkspace, visibleMonthEnd, visibleMonthStart, workspace.tasks])
+  }, [isTaskTimelineInteracting, membersById, refreshWorkspace, visibleMonthAnalytics.taskCountByOwner, visibleMonthEnd, visibleMonthStart, workspace.tasks])
 
   useEffect(() => {
     if (!isMemberRowReordering) {
@@ -3217,9 +3848,13 @@ function App() {
     if (!fallbackMember) {
       setResourceNotice({
         tone: 'danger',
-        message: '当前还没有成员，请先在组织管理里创建成员后再新增项目。',
+        message: canManageOrganization
+          ? '当前还没有成员，请先在组织管理里创建成员后再新增项目。'
+          : '当前还没有成员，请联系管理员或团队负责人先维护成员后再新增项目。',
       })
-      setActiveNav('组织管理')
+      if (canManageOrganization) {
+        navigateToNav('组织管理')
+      }
       return
     }
 
@@ -3251,20 +3886,254 @@ function App() {
     }
   }
 
-  const navItems: NavSection[] = ['总览', '资源排期', '组织管理', '记录中心']
+  const handleLoginSubmit = async (event: ReactFormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+
+    try {
+      setIsLoginSubmitting(true)
+      setLoginError(null)
+      setWorkspaceError(null)
+      const payload = await loginRequest({
+        username: loginUsername.trim(),
+        password: loginPassword,
+      })
+      setCurrentAccount(payload.account)
+      setIsWorkspaceLoading(true)
+      if (getNavFromPath(window.location.pathname) === '组织管理' && !payload.account.permissions.canManageOrganization) {
+        navigateToNav('资源排期', { replace: true })
+      }
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : '登录失败，请检查账号密码。')
+      setCurrentAccount(null)
+    } finally {
+      setIsLoginSubmitting(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    try {
+      await logoutRequest()
+    } catch {
+      // The client token is cleared in the API helper even if the network call
+      // fails, so the local session always exits cleanly.
+    } finally {
+      setCurrentAccount(null)
+      setWorkspaceError(null)
+      setIsWorkspaceLoading(false)
+      navigateToNav('资源排期', { replace: true })
+    }
+  }
+
+  const openProfileEditor = () => {
+    if (!currentAccount) {
+      return
+    }
+
+    setProfileNotice(null)
+    setProfileEditor({
+      displayName: currentAccount.displayName,
+      avatar: currentAccount.avatar || buildAvatarLabel(currentAccount.displayName),
+      avatarImagePreview: currentAccount.avatarImageUrl,
+      avatarImagePayload: null,
+      avatarImageRemoved: false,
+      newPassword: '',
+      confirmPassword: '',
+    })
+  }
+
+  const handleProfileAvatarFileChange = (event: ReactChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+
+    if (!file) {
+      return
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setProfileNotice({ tone: 'danger', message: '头像请上传图片或 GIF 文件。' })
+      return
+    }
+
+    if (file.size > AVATAR_UPLOAD_MAX_BYTES) {
+      setProfileNotice({ tone: 'danger', message: '头像文件不能超过 10MB。' })
+      return
+    }
+
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      if (!result.startsWith('data:image/')) {
+        setProfileNotice({ tone: 'danger', message: '头像文件读取失败，请重新选择图片。' })
+        return
+      }
+      setProfileNotice(null)
+      setProfileEditor((current) =>
+        current
+          ? {
+              ...current,
+              avatarImagePreview: result,
+              avatarImagePayload: result,
+              avatarImageRemoved: false,
+            }
+          : current,
+      )
+    }
+    reader.onerror = () => {
+      setProfileNotice({ tone: 'danger', message: '头像文件读取失败，请重新选择图片。' })
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const saveProfileEditor = async () => {
+    if (!profileEditor) {
+      return
+    }
+
+    const displayName = profileEditor.displayName.trim()
+    const avatar = (profileEditor.avatar.trim() || buildAvatarLabel(displayName)).slice(0, 2)
+    const newPassword = profileEditor.newPassword.trim()
+
+    if (!displayName) {
+      setProfileNotice({ tone: 'danger', message: '姓名不能为空。' })
+      return
+    }
+
+    if (newPassword && newPassword.length < 6) {
+      setProfileNotice({ tone: 'danger', message: '新密码至少需要 6 位。' })
+      return
+    }
+
+    if (newPassword && newPassword !== profileEditor.confirmPassword.trim()) {
+      setProfileNotice({ tone: 'danger', message: '两次输入的新密码不一致。' })
+      return
+    }
+
+    try {
+      setIsProfileSaving(true)
+      setProfileNotice(null)
+      const response = await updateCurrentProfile({
+        displayName,
+        avatar,
+        avatarImage: profileEditor.avatarImageRemoved ? null : profileEditor.avatarImagePayload ?? undefined,
+        newPassword: newPassword || undefined,
+      })
+      setCurrentAccount(response.account)
+      setProfileEditor(null)
+      setProfileNotice(null)
+      await refreshWorkspace()
+    } catch (error) {
+      setProfileNotice({
+        tone: 'danger',
+        message: error instanceof Error ? error.message : '个人资料保存失败，请稍后重试。',
+      })
+    } finally {
+      setIsProfileSaving(false)
+    }
+  }
+
+  const showFloatingTooltip = (
+    event: ReactMouseEvent<HTMLElement> | ReactFocusEvent<HTMLElement>,
+    text: string,
+  ) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    const viewportPadding = 16
+    const x = Math.min(Math.max(rect.left + rect.width / 2, viewportPadding), window.innerWidth - viewportPadding)
+    const y = Math.max(rect.top - 10, viewportPadding)
+    setFloatingTooltip({ text, x, y })
+  }
+
+  const hideFloatingTooltip = () => {
+    setFloatingTooltip(null)
+  }
+
+  const handleTimelineBodyScroll = (event: ReactUIEvent<HTMLDivElement>) => {
+    // Scroll position drives row windowing, so we only track the lightweight
+    // metrics needed to know which slice of the timeline should stay mounted.
+    const scrollElement = event.currentTarget
+    setTimelineScrollTop(scrollElement.scrollTop)
+
+    if (timelineViewportHeight !== scrollElement.clientHeight) {
+      setTimelineViewportHeight(scrollElement.clientHeight)
+    }
+  }
+
+  const navItems: NavSection[] = canManageOrganization
+    ? ['总览', '资源排期', '组织管理', '记录中心']
+    : ['总览', '资源排期', '记录中心']
+  const shellClassName = [
+    isFixedWorkspacePage ? 'dashboard-shell dashboard-shell-fixed' : 'dashboard-shell',
+    appliedTheme === 'dark' ? 'theme-dark' : 'theme-light',
+  ].join(' ')
+
+  if (isAuthChecking) {
+    return (
+      <div className={`login-shell theme-${appliedTheme}`}>
+        <div className="login-card login-card-loading">
+          <img className="login-brand-icon" src={BRAND_ICON_PATH} alt="" />
+          <p className="caps">正在恢复登录</p>
+          <h1>项目排期工作台</h1>
+          <span className="login-spinner" aria-hidden="true"></span>
+        </div>
+      </div>
+    )
+  }
+
+  if (!currentAccount) {
+    return (
+      <div className={`login-shell theme-${appliedTheme}`}>
+        <section className="login-card" aria-label="账号登录">
+          <div className="login-brand-row">
+            <img className="login-brand-icon" src={BRAND_ICON_PATH} alt="" />
+            <div>
+              <p className="caps">项目排期工作台</p>
+              <h1>登录后进入排期系统</h1>
+            </div>
+          </div>
+          <p className="login-copy">
+            账号会绑定到成员档案。管理员拥有全部权限，团队负责人可以进入组织管理，普通成员专注查看与调整项目排期。
+          </p>
+          <form className="login-form" onSubmit={handleLoginSubmit}>
+            <label>
+              <span>账号</span>
+              <input
+                autoComplete="username"
+                value={loginUsername}
+                onChange={(event) => setLoginUsername(event.target.value)}
+                placeholder="请输入账号"
+              />
+            </label>
+            <label>
+              <span>密码</span>
+              <input
+                autoComplete="current-password"
+                type="password"
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+                placeholder="请输入密码"
+              />
+            </label>
+            {loginError ? <div className="login-error">{loginError}</div> : null}
+            <button className="login-submit" type="submit" disabled={isLoginSubmitting}>
+              {isLoginSubmitting ? '登录中...' : '登录'}
+            </button>
+          </form>
+          <div className="login-hint">
+            <strong>默认账号</strong>
+            <span>管理员：admin / admin</span>
+            <span>团队负责人：linqing、zhouyi、xuheng / 123456</span>
+            <span>普通成员：mina / 123456</span>
+          </div>
+        </section>
+      </div>
+    )
+  }
 
   return (
-    <div
-      className={
-        isFixedWorkspacePage
-          ? 'dashboard-shell dashboard-shell-fixed'
-          : 'dashboard-shell'
-      }
-    >
+    <div className={shellClassName}>
       <aside className="sidebar">
         <div className="brand-card">
           <div className="brand-mark" aria-hidden="true">
-            <img className="brand-mark-image" src="/favicon.svg" alt="" />
+            <img className="brand-mark-image" src={BRAND_ICON_PATH} alt="" />
           </div>
           <div className="brand-copy">
             <p className="caps">产品定位</p>
@@ -3272,12 +4141,45 @@ function App() {
           </div>
         </div>
 
+        <section className="theme-panel" aria-label="界面模式">
+          <div className="theme-panel-copy">
+            <p className="caps">界面模式</p>
+            <span className="theme-panel-hint">{themeModeSummary}</span>
+          </div>
+          <div className="theme-toggle-group" role="group" aria-label="主题切换">
+            <button
+              type="button"
+              className={themePreference === 'light' ? 'theme-toggle-button is-active' : 'theme-toggle-button'}
+              onClick={() => setThemePreference('light')}
+            >
+              浅色
+            </button>
+            <button
+              type="button"
+              className={themePreference === 'dark' ? 'theme-toggle-button is-active' : 'theme-toggle-button'}
+              onClick={() => setThemePreference('dark')}
+            >
+              暗夜
+            </button>
+            <button
+              type="button"
+              className={themePreference === 'system' ? 'theme-toggle-button is-active' : 'theme-toggle-button'}
+              onClick={() => setThemePreference('system')}
+            >
+              系统
+            </button>
+          </div>
+        </section>
+
         <nav className="nav-list" aria-label="主导航">
           {navItems.map((item) => (
-            <button
+            <a
               key={item}
+              href={navPathMap[item]}
+              aria-current={activeNav === item ? 'page' : undefined}
               className={activeNav === item ? 'nav-item is-active' : 'nav-item'}
-              onClick={() => {
+              onClick={(event) => {
+                event.preventDefault()
                 setPendingTaskCoachId(null)
                 setTaskCoach(null)
 
@@ -3291,14 +4193,59 @@ function App() {
                   return
                 }
 
-                setActiveNav(item)
+                navigateToNav(item)
               }}
             >
               <span className="nav-dot"></span>
               {item}
-            </button>
+            </a>
           ))}
         </nav>
+
+        <section
+          className="account-panel"
+          aria-label="当前账号"
+          onClick={openProfileEditor}
+          onPointerUp={(event) => {
+            if ((event.target as HTMLElement).closest('.account-logout-button')) {
+              return
+            }
+            openProfileEditor()
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              openProfileEditor()
+            }
+          }}
+          role="button"
+          tabIndex={0}
+          title="点击修改个人资料"
+        >
+          <AvatarBubble
+            className="account-avatar"
+            imageUrl={currentAccount.avatarImageUrl}
+            label={currentAccount.avatar || currentAccount.displayName.charAt(0)}
+          />
+          <div className="account-copy">
+            <strong>{currentAccount.displayName}</strong>
+            <span>
+              {accountRoleLabel}
+              {currentAccount.memberName ? ` · ${currentAccount.username}` : ''}
+            </span>
+          </div>
+          <button
+            className="account-logout-button"
+            type="button"
+            onPointerUp={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation()
+              void handleLogout()
+            }}
+          >
+            退出
+          </button>
+        </section>
       </aside>
 
       <main className={mainPanelClassName}>
@@ -3621,7 +4568,11 @@ function App() {
                               }
                               onClick={() => selectResourceMember(member.id)}
                             >
-                              <span className="resource-avatar resource-nav-icon">{member.avatar}</span>
+                              <AvatarBubble
+                                className="resource-avatar resource-nav-icon"
+                                imageUrl={member.avatarImageUrl}
+                                label={member.avatar}
+                              />
                               <span className="resource-nav-copy">
                                 <strong>{member.name}</strong>
                                 <span>
@@ -3820,7 +4771,11 @@ function App() {
                                         className="resource-member-card"
                                         onClick={() => selectResourceMember(member.id)}
                                       >
-                                        <span className="resource-avatar resource-member-card-avatar">{member.avatar}</span>
+                                        <AvatarBubble
+                                          className="resource-avatar resource-member-card-avatar"
+                                          imageUrl={member.avatarImageUrl}
+                                          label={member.avatar}
+                                        />
                                         <span className="resource-member-card-copy">
                                           <strong>{member.name}</strong>
                                           <span>{member.role}</span>
@@ -3862,6 +4817,13 @@ function App() {
                                               {task.priority}
                                             </em>
                                             <span className="resource-task-status">{task.status}</span>
+                                            <button
+                                              className="resource-transfer-button"
+                                              type="button"
+                                              onClick={() => openTaskTransfer(task.id)}
+                                            >
+                                              转交
+                                            </button>
                                           </div>
                                         </article>
                                       )
@@ -3997,9 +4959,11 @@ function App() {
                         <div className="resource-detail-shell">
                           <div className="resource-detail-hero">
                             <div className="resource-detail-identity">
-                              <span className="resource-avatar resource-detail-icon">
-                                {activeResourceMember.avatar}
-                              </span>
+                              <AvatarBubble
+                                className="resource-avatar resource-detail-icon"
+                                imageUrl={activeResourceMember.avatarImageUrl}
+                                label={activeResourceMember.avatar}
+                              />
                               <div className="resource-detail-copy-block">
                                 <p className="caps">成员档案</p>
                                 <h4>{activeResourceMember.name}</h4>
@@ -4107,6 +5071,13 @@ function App() {
                                             {task.priority}
                                           </em>
                                           <span className="resource-task-status">{task.status}</span>
+                                          <button
+                                            className="resource-transfer-button"
+                                            type="button"
+                                            onClick={() => openTaskTransfer(task.id)}
+                                          >
+                                            转交
+                                          </button>
                                         </div>
                                       </article>
                                     )
@@ -4131,9 +5102,11 @@ function App() {
                   </div>
 
                   <div className="topbar-actions">
-                    <button className="ghost-button topbar-action-button" onClick={openResourceModal}>
-                      组织管理
-                    </button>
+                    {canManageOrganization ? (
+                      <button className="ghost-button topbar-action-button" onClick={openResourceModal}>
+                        组织管理
+                      </button>
+                    ) : null}
                     <button className="ghost-button topbar-action-button" onClick={handleCreateTask}>
                       新增项目
                     </button>
@@ -4161,7 +5134,7 @@ function App() {
                       <p>进行中</p>
                       <span className="summary-tag blue-tag">Active</span>
                     </div>
-                    <strong>{activeTasks.length}</strong>
+                    <strong>{activeTaskCount}</strong>
                     <span>当前执行</span>
                   </article>
                   <article className="summary-card compact-card">
@@ -4169,7 +5142,7 @@ function App() {
                       <p>风险项目</p>
                       <span className="summary-tag orange-tag">Alert</span>
                     </div>
-                    <strong>{riskTasks.length}</strong>
+                    <strong>{riskTaskCount}</strong>
                     <span>需优先处理</span>
                   </article>
                 </section>
@@ -4476,14 +5449,20 @@ function App() {
                                 <span
                                   className="table-cell table-cell-project"
                                   title={task.title}
-                                  data-tooltip={task.title}
+                                  onBlur={hideFloatingTooltip}
+                                  onFocus={(event) => showFloatingTooltip(event, task.title)}
+                                  onMouseEnter={(event) => showFloatingTooltip(event, task.title)}
+                                  onMouseLeave={hideFloatingTooltip}
                                 >
                                   <span className="truncate-text">{task.title}</span>
                                 </span>
                                 <span
                                   className="table-cell table-cell-start"
                                   title={ownerName}
-                                  data-tooltip={ownerName}
+                                  onBlur={hideFloatingTooltip}
+                                  onFocus={(event) => showFloatingTooltip(event, ownerName)}
+                                  onMouseEnter={(event) => showFloatingTooltip(event, ownerName)}
+                                  onMouseLeave={hideFloatingTooltip}
                                 >
                                   <span className="truncate-text">{ownerName}</span>
                                 </span>
@@ -4505,7 +5484,10 @@ function App() {
                                 <span
                                   className="table-cell table-cell-start"
                                   title={`${executionRange} · ${executionDuration}`}
-                                  data-tooltip={`${executionRange} · ${executionDuration}`}
+                                  onBlur={hideFloatingTooltip}
+                                  onFocus={(event) => showFloatingTooltip(event, `${executionRange} · ${executionDuration}`)}
+                                  onMouseEnter={(event) => showFloatingTooltip(event, `${executionRange} · ${executionDuration}`)}
+                                  onMouseLeave={hideFloatingTooltip}
                                 >
                                   <span className="table-period-stack">
                                     <strong>{executionRange}</strong>
@@ -4515,7 +5497,10 @@ function App() {
                                 <span
                                   className="table-cell table-cell-milestone"
                                   title={task.milestone}
-                                  data-tooltip={task.milestone}
+                                  onBlur={hideFloatingTooltip}
+                                  onFocus={(event) => showFloatingTooltip(event, task.milestone)}
+                                  onMouseEnter={(event) => showFloatingTooltip(event, task.milestone)}
+                                  onMouseLeave={hideFloatingTooltip}
                                 >
                                   <span className="truncate-text">{task.milestone}</span>
                                 </span>
@@ -4581,6 +5566,25 @@ function App() {
                       </div>
 
                       <div className="timeline-filter-tools" ref={timelineFilterBarRef}>
+                        <div className="timeline-range-toggle" aria-label="时间范围切换">
+                          <span>时间范围</span>
+                          <div className="timeline-range-options">
+                            {(Object.entries(TIMELINE_RANGE_CONFIG) as [TimelineRangeMode, typeof TIMELINE_RANGE_CONFIG[TimelineRangeMode]][]).map(
+                              ([mode, config]) => (
+                                <button
+                                  key={mode}
+                                  type="button"
+                                  className={timelineRangeMode === mode ? 'timeline-range-button is-active' : 'timeline-range-button'}
+                                  onClick={() => setTimelineRangeMode(mode)}
+                                >
+                                  <strong>{config.label}</strong>
+                                  <small>{config.helper}</small>
+                                </button>
+                              ),
+                            )}
+                          </div>
+                        </div>
+
                         <div className="overview-filter-group">
                           <button
                             type="button"
@@ -4672,7 +5676,7 @@ function App() {
                         </button>
                       ) : null}
                       <button className="ghost-button" onClick={() => shiftTimelineWindow(-1)}>
-                        上周
+                        {timelineRangeConfig.previousLabel}
                       </button>
                       <div className="month-navigator-anchor" ref={dateJumpRef}>
                         <button
@@ -4744,17 +5748,17 @@ function App() {
                                 type="button"
                                 className="pill"
                                 onClick={() =>
-                                  jumpToDate(addCalendarDays(pendingJumpDate, TIMELINE_WINDOW_STEP_DAYS))
+                                  jumpToDate(addCalendarDays(pendingJumpDate, timelineWindowStepDays))
                                 }
                               >
-                                下周
+                                {timelineRangeMode === 'oneMonth' ? '下一段' : '下周'}
                               </button>
                             </div>
                           </div>
                         ) : null}
                       </div>
                       <button className="ghost-button" onClick={() => shiftTimelineWindow(1)}>
-                        下周
+                        {timelineRangeConfig.nextLabel}
                       </button>
                     </div>
                   </div>
@@ -4791,12 +5795,24 @@ function App() {
                         </div>
                       </div>
 
-                      <div className="timeline-body-scroll">
+                      <div
+                        ref={timelineBodyScrollRef}
+                        className="timeline-body-scroll"
+                        onScroll={handleTimelineBodyScroll}
+                      >
                         <div className="timeline-body">
                         {memberRows.length === 0 ? (
                           <div className="timeline-empty">当前筛选下没有可展示的成员，请重新选择成员范围。</div>
                         ) : (
-                          memberRows.map((row, rowIndex) => {
+                          <>
+                          {timelineVisibleWindow.beforeHeight > 0 ? (
+                            <div
+                              aria-hidden="true"
+                              className="timeline-virtual-spacer"
+                              style={{ height: `${timelineVisibleWindow.beforeHeight}px` }}
+                            />
+                          ) : null}
+                          {timelineVisibleWindow.rows.map(({ row, absoluteIndex }) => {
                           const rowTasks =
                             taskTimelineInteraction?.mode === 'move'
                               ? (() => {
@@ -4860,7 +5876,7 @@ function App() {
                               }}
                               className={[
                                 'person-row',
-                                `row-tone-${(rowIndex % 4) + 1}`,
+                                `row-tone-${(absoluteIndex % 4) + 1}`,
                                 isRowBeingReordered ? 'is-reordering' : '',
                               ]
                                 .filter(Boolean)
@@ -4868,10 +5884,13 @@ function App() {
                               style={
                                 isRowBeingReordered
                                   ? {
+                                      marginBottom: `${TIMELINE_ROW_GAP}px`,
                                       transform: `translateY(${rowDragOffset}px)`,
                                       zIndex: 4,
                                     }
-                                  : undefined
+                                  : {
+                                      marginBottom: `${TIMELINE_ROW_GAP}px`,
+                                    }
                               }
                             >
                               <div
@@ -4981,7 +6000,15 @@ function App() {
                               </div>
                             </div>
                           )
-                        })
+                        })}
+                        {timelineVisibleWindow.afterHeight > 0 ? (
+                          <div
+                            aria-hidden="true"
+                            className="timeline-virtual-spacer"
+                            style={{ height: `${timelineVisibleWindow.afterHeight}px` }}
+                          />
+                        ) : null}
+                        </>
                         )}
                         </div>
                       </div>
@@ -5004,6 +6031,74 @@ function App() {
           <button className="danger" onClick={() => openDeleteConfirm(contextMenu.taskId)}>
             删除项目
           </button>
+        </div>
+      ) : null}
+
+      {taskTransfer && transferTask ? (
+        <div className="overlay" onClick={() => setTaskTransfer(null)}>
+          <div className="dialog transfer-dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <p className="caps">项目转交</p>
+                <h3>选择新的项目负责人</h3>
+              </div>
+              <button
+                className="circle-close-button"
+                aria-label="关闭项目转交弹窗"
+                onClick={() => setTaskTransfer(null)}
+                type="button"
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            </div>
+
+            <div className="transfer-summary-card">
+              <span className="transfer-project-label">项目</span>
+              <strong>{transferTask.title}</strong>
+              <p>
+                当前负责人：{transferCurrentOwner?.name ?? '未分配'} ·{' '}
+                {formatTaskExecutionRange(transferTask)}
+              </p>
+            </div>
+
+            <label className="transfer-member-field">
+              转交给
+              <select
+                value={taskTransfer.targetMemberId}
+                disabled={transferCandidateMembers.length === 0}
+                onChange={(event) =>
+                  setTaskTransfer((current) =>
+                    current ? { ...current, targetMemberId: event.target.value } : current,
+                  )
+                }
+              >
+                {transferCandidateMembers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.name} · {member.role} · {teamsById[member.teamId]?.name ?? '未分配团队'}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <p className="transfer-helper">
+              保存后项目会进入新负责人的项目列表，并自动同步到
+              {transferTargetTeam ? `“${transferTargetTeam.name}”` : '新负责人所属团队'}。
+            </p>
+
+            <div className="dialog-actions">
+              <button className="ghost-button" onClick={() => setTaskTransfer(null)} type="button">
+                取消
+              </button>
+              <button
+                className="primary-button"
+                disabled={isTaskTransferSaving || transferCandidateMembers.length === 0}
+                onClick={saveTaskTransfer}
+                type="button"
+              >
+                {isTaskTransferSaving ? '转交中...' : '确认转交'}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -5036,6 +6131,183 @@ function App() {
                 }
               >
                 确认删除
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {profileEditor ? (
+        <div className="overlay" onClick={() => setProfileEditor(null)}>
+          <div className="dialog profile-dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="dialog-header">
+              <div>
+                <p className="caps">个人资料</p>
+                <h3>账号与头像设置</h3>
+              </div>
+              <button
+                className="circle-close-button"
+                aria-label="关闭个人资料弹窗"
+                onClick={() => setProfileEditor(null)}
+                type="button"
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            </div>
+
+            <div className="profile-editor-preview">
+              <AvatarBubble
+                className="account-avatar profile-editor-avatar"
+                imageUrl={profileEditor.avatarImagePreview}
+                label={profileEditor.avatar.trim() || buildAvatarLabel(profileEditor.displayName)}
+              />
+              <div>
+                <strong>{profileEditor.displayName.trim() || '未命名用户'}</strong>
+                <span>{currentAccount.username} · {accountRoleLabel}</span>
+              </div>
+            </div>
+
+            {profileNotice ? (
+              <div className={`resource-notice is-${profileNotice.tone}`}>{profileNotice.message}</div>
+            ) : null}
+
+            <div className="editor-grid">
+              <label>
+                我的姓名
+                <input
+                  value={profileEditor.displayName}
+                  onChange={(event) =>
+                    setProfileEditor((current) =>
+                      current ? { ...current, displayName: event.target.value } : current,
+                    )
+                  }
+                />
+              </label>
+
+              <label>
+                头像文字
+                <div className="profile-avatar-field">
+                  <input
+                    maxLength={2}
+                    placeholder="2字以内"
+                    value={profileEditor.avatar}
+                    onChange={(event) =>
+                      setProfileEditor((current) =>
+                        current ? { ...current, avatar: event.target.value } : current,
+                      )
+                    }
+                  />
+                  <button
+                    className="ghost-button profile-auto-avatar-button"
+                    type="button"
+                    onClick={() =>
+                      setProfileEditor((current) =>
+                        current
+                          ? { ...current, avatar: buildAvatarLabel(current.displayName) }
+                          : current,
+                      )
+                    }
+                  >
+                    自动
+                  </button>
+                </div>
+              </label>
+
+              <div className="profile-upload-field">
+                <span>上传头像</span>
+                <div className="profile-upload-card">
+                  <AvatarBubble
+                    className="account-avatar profile-upload-preview"
+                    imageUrl={profileEditor.avatarImagePreview}
+                    label={profileEditor.avatar.trim() || buildAvatarLabel(profileEditor.displayName)}
+                  />
+                  <div className="profile-upload-copy">
+                    <strong>图片或 GIF</strong>
+                    <small>支持 PNG/JPG/WebP/GIF，最大 10MB</small>
+                  </div>
+                  <input
+                    ref={profileAvatarInputRef}
+                    className="profile-upload-input"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    type="file"
+                    onChange={handleProfileAvatarFileChange}
+                  />
+                  <button
+                    className="ghost-button profile-upload-button"
+                    type="button"
+                    onClick={() => profileAvatarInputRef.current?.click()}
+                  >
+                    选择
+                  </button>
+                  {profileEditor.avatarImagePreview ? (
+                    <button
+                      className="ghost-button profile-upload-remove"
+                      type="button"
+                      onClick={() =>
+                        setProfileEditor((current) =>
+                          current
+                            ? {
+                                ...current,
+                                avatarImagePreview: null,
+                                avatarImagePayload: null,
+                                avatarImageRemoved: true,
+                              }
+                            : current,
+                        )
+                      }
+                    >
+                      移除
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              <label>
+                新密码
+                <input
+                  autoComplete="new-password"
+                  placeholder="至少 6 位，不修改可留空"
+                  type="password"
+                  value={profileEditor.newPassword}
+                  onChange={(event) =>
+                    setProfileEditor((current) =>
+                      current ? { ...current, newPassword: event.target.value } : current,
+                    )
+                  }
+                />
+              </label>
+
+              <label>
+                确认新密码
+                <input
+                  autoComplete="new-password"
+                  placeholder="再次输入新密码"
+                  type="password"
+                  value={profileEditor.confirmPassword}
+                  onChange={(event) =>
+                    setProfileEditor((current) =>
+                      current ? { ...current, confirmPassword: event.target.value } : current,
+                    )
+                  }
+                />
+              </label>
+            </div>
+
+            <p className="profile-editor-hint">
+              新建成员会自动生成登录账号，初始密码统一为 123456；修改密码只需要填写新密码并确认。
+            </p>
+
+            <div className="dialog-actions">
+              <button className="ghost-button" onClick={() => setProfileEditor(null)} type="button">
+                取消
+              </button>
+              <button
+                className="primary-button"
+                disabled={isProfileSaving}
+                onClick={saveProfileEditor}
+                type="button"
+              >
+                {isProfileSaving ? '保存中...' : '保存资料'}
               </button>
             </div>
           </div>
@@ -5289,6 +6561,18 @@ function App() {
               </button>
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {floatingTooltip ? (
+        <div
+          className="floating-tooltip"
+          style={{
+            left: `${floatingTooltip.x}px`,
+            top: `${floatingTooltip.y}px`,
+          }}
+        >
+          {floatingTooltip.text}
         </div>
       ) : null}
     </div>

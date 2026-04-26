@@ -14,6 +14,7 @@ export type ApiMember = {
   role: string
   teamId: string
   avatar: string
+  avatarImageUrl: string | null
   capacityHours: number
   sortOrder: number
   createdAt: string
@@ -55,6 +56,23 @@ export type ApiOperationRecord = {
   time: string
 }
 
+export type ApiAccountRole = 'admin' | 'team_lead' | 'member'
+
+export type ApiAccount = {
+  id: string
+  username: string
+  role: ApiAccountRole
+  memberId: string | null
+  memberName: string | null
+  displayName: string
+  avatar: string
+  avatarImageUrl: string | null
+  permissions: {
+    canManageAll: boolean
+    canManageOrganization: boolean
+  }
+}
+
 export type PaginatedResponse<T> = {
   items: T[]
   page: number
@@ -78,11 +96,37 @@ export type BootstrapResponse = {
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
+const AUTH_TOKEN_STORAGE_KEY = 'resource-planning-auth-token'
+
+let authToken =
+  typeof window === 'undefined' ? '' : window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) ?? ''
+
+export function setAuthToken(token: string) {
+  authToken = token
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token)
+  }
+}
+
+export function getAuthToken() {
+  return authToken
+}
+
+export function clearAuthToken() {
+  authToken = ''
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // All browser-side data access goes through one small helper so we only pay
+  // the fetch/error-handling cost once and can keep the page modules focused on
+  // business logic instead of repeated transport boilerplate.
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
       'Content-Type': 'application/json',
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
       ...(init?.headers ?? {}),
     },
     ...init,
@@ -90,6 +134,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null
+    if (response.status === 401) {
+      clearAuthToken()
+    }
     throw new Error(payload?.error ?? `请求失败：${response.status}`)
   }
 
@@ -100,7 +147,45 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T
 }
 
+export async function login(payload: { username: string; password: string }) {
+  const response = await request<{ token: string; account: ApiAccount }>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  setAuthToken(response.token)
+  return response
+}
+
+export async function fetchCurrentAccount() {
+  return request<{ account: ApiAccount }>('/auth/me')
+}
+
+export async function logout() {
+  try {
+    await request<{ success: boolean }>('/auth/logout', {
+      method: 'POST',
+    })
+  } finally {
+    clearAuthToken()
+  }
+}
+
+export async function updateCurrentProfile(payload: {
+  displayName: string
+  avatar: string
+  avatarImage?: string | null
+  newPassword?: string
+}) {
+  return request<{ account: ApiAccount }>('/auth/profile', {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function fetchBootstrap() {
+  // Bootstrap intentionally returns the minimum needed for the first screen:
+  // teams, members, tasks and summary counts. Release/operation records are
+  // paginated separately to avoid inflating the initial payload.
   return request<BootstrapResponse>('/bootstrap')
 }
 
@@ -153,7 +238,7 @@ export async function createMember(payload: {
   avatar: string
   capacityHours: number
 }) {
-  return request<{ item: ApiMember }>('/members', {
+  return request<{ item: ApiMember; accountUsername: string; defaultPassword: string }>('/members', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
@@ -229,9 +314,16 @@ export async function deleteTask(taskId: string) {
 }
 
 export async function exportWorkspaceSnapshot() {
-  const response = await fetch(`${API_BASE_URL}/export/workspace`)
+  const response = await fetch(`${API_BASE_URL}/export/workspace`, {
+    headers: {
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+    },
+  })
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null
+    if (response.status === 401) {
+      clearAuthToken()
+    }
     throw new Error(payload?.error ?? `导出失败：${response.status}`)
   }
 
