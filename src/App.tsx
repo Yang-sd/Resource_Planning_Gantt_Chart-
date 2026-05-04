@@ -439,6 +439,17 @@ const CHINA_OFFICIAL_HOLIDAY_CALENDAR_MAP_2026 = buildHolidayCalendarMap(
 
 const SEEDED_UPDATE_RECORDS: ReleaseRecord[] = [
   {
+    id: 'release-22',
+    version: 'v1.11.0',
+    updatedAt: '2026/05/05 07:50',
+    features: [
+      '新增移动端响应式适配，手机访问时左侧导航压缩为顶部横向入口，减少首屏占用。',
+      '总览项目清单在小屏下改为卡片式信息结构，项目、负责人、状态、优先级、周期和里程碑更容易阅读。',
+      '资源排期时间轴在手机上支持横向平滑滚动，避免 14 天或一个月视图被硬挤到一屏。',
+      '组织管理、记录中心和弹窗在移动端调整为更适合触控的卡片、横向列表和底部弹层。',
+    ],
+  },
+  {
     id: 'release-21',
     version: 'v1.10.3',
     updatedAt: '2026/05/05 07:20',
@@ -6013,6 +6024,7 @@ function App() {
                                 </span>
                                 <span
                                   className="table-cell table-cell-project"
+                                  data-mobile-label="项目"
                                   title={task.title}
                                   onBlur={hideFloatingTooltip}
                                   onFocus={(event) => showFloatingTooltip(event, task.title)}
@@ -6023,6 +6035,7 @@ function App() {
                                 </span>
                                 <span
                                   className="table-cell table-cell-start"
+                                  data-mobile-label="负责人"
                                   title={ownerName}
                                   onBlur={hideFloatingTooltip}
                                   onFocus={(event) => showFloatingTooltip(event, ownerName)}
@@ -6031,10 +6044,10 @@ function App() {
                                 >
                                   <span className="truncate-text">{ownerName}</span>
                                 </span>
-                                <span className="table-cell table-cell-start">
+                                <span className="table-cell table-cell-start" data-mobile-label="状态">
                                   <span>{task.status}</span>
                                 </span>
-                                <span className="table-cell table-cell-start">
+                                <span className="table-cell table-cell-start" data-mobile-label="优先级">
                                   <em
                                     className="priority-pill"
                                     style={{
@@ -6048,6 +6061,7 @@ function App() {
                                 </span>
                                 <span
                                   className="table-cell table-cell-start"
+                                  data-mobile-label="周期"
                                   title={`${executionRange} · ${executionDuration}`}
                                   onBlur={hideFloatingTooltip}
                                   onFocus={(event) => showFloatingTooltip(event, `${executionRange} · ${executionDuration}`)}
@@ -6061,6 +6075,7 @@ function App() {
                                 </span>
                                 <span
                                   className="table-cell table-cell-milestone"
+                                  data-mobile-label="里程碑"
                                   title={task.milestone}
                                   onBlur={hideFloatingTooltip}
                                   onFocus={(event) => showFloatingTooltip(event, task.milestone)}
