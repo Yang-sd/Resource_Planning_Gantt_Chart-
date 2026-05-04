@@ -27,12 +27,14 @@ import {
   exportWorkspaceSnapshot,
   fetchBootstrap,
   fetchCurrentAccount,
+  fetchDeletedResourceArchives,
   fetchOperationRecords,
   fetchReleaseRecords,
   getAuthToken,
   login as loginRequest,
   logout as logoutRequest,
   type ApiAccount,
+  type ApiDeletedResourceArchive,
   type ApiMember,
   type ApiOperationRecord,
   type ApiReleaseRecord,
@@ -100,6 +102,32 @@ type OperationRecord = {
   detail: string
 }
 
+type DeletedArchiveProject = {
+  id: string
+  title: string
+  priority: string
+  status: string
+  startDate: string
+  endDate: string
+}
+
+type DeletedArchiveMemberProjectGroup = {
+  memberId: string
+  memberName: string
+  memberRole: string
+  projects: DeletedArchiveProject[]
+}
+
+type DeletedResourceArchive = {
+  id: string
+  actor: string
+  teamName: string
+  memberCount: number
+  taskCount: number
+  createdAt: string
+  memberProjectGroups: DeletedArchiveMemberProjectGroup[]
+}
+
 type Account = ApiAccount
 
 type Workspace = {
@@ -164,11 +192,27 @@ type ResourceNoticeState = {
   message: string
 } | null
 
-type ResourceDeleteTarget = {
-  kind: 'team' | 'member'
-  id: string
-  name: string
-} | null
+type TeamDeleteCascadeMeta = {
+  memberCount: number
+  taskCount: number
+  memberNames: string[]
+  taskTitles: string[]
+  confirmed: boolean
+}
+
+type ResourceDeleteTarget =
+  | {
+      kind: 'team'
+      id: string
+      name: string
+      cascade: TeamDeleteCascadeMeta
+    }
+  | {
+      kind: 'member'
+      id: string
+      name: string
+    }
+  | null
 
 type TaskTransferState = {
   taskId: string
@@ -313,7 +357,7 @@ type NavSection =
   | '资源排期'
   | '记录中心'
   | '账号管理'
-type RecordView = '更新记录' | '操作记录'
+type RecordView = '更新记录' | '操作记录' | '历史删除组人项目'
 type OverviewDurationFilter = '1天' | '2-3天' | '4-7天' | '8天以上'
 type OverviewFilterMenu = 'owner' | 'status' | 'priority' | 'duration' | null
 type TimelineFilterMenu = 'member' | 'holiday' | null
@@ -394,6 +438,25 @@ const CHINA_OFFICIAL_HOLIDAY_CALENDAR_MAP_2026 = buildHolidayCalendarMap(
 )
 
 const SEEDED_UPDATE_RECORDS: ReleaseRecord[] = [
+  {
+    id: 'release-20',
+    version: 'v1.10.2',
+    updatedAt: '2026/05/04 22:20',
+    features: [
+      '优化记录中心删除归档详情，改为按成员分组展示对应负责项目。',
+      '每个归档项目补充日期、优先级和状态，方便回溯删除前的人力分工关系。',
+    ],
+  },
+  {
+    id: 'release-19',
+    version: 'v1.10.1',
+    updatedAt: '2026/05/04 20:10',
+    features: [
+      '删除项目组时新增二次确认，明确提示组内成员和对应项目是否同步删除，避免误删。',
+      '确认删除后会先把团队、成员和项目核心字段归档到记录中心，保留历史追溯入口。',
+      '记录中心新增“历史删除组人项目”下拉视图，可查看删除时间、操作人、项目组和归档明细。',
+    ],
+  },
   {
     id: 'release-18',
     version: 'v1.10.0',
@@ -909,6 +972,71 @@ function mapApiOperationRecordToOperationRecord(record: ApiOperationRecord): Ope
     action: record.action,
     target: record.target,
     detail: record.detail,
+  }
+}
+
+function mapApiDeletedArchiveToDeletedResourceArchive(
+  record: ApiDeletedResourceArchive,
+): DeletedResourceArchive {
+  const archivedMemberIds = new Set(record.snapshot.members.map((member) => member.id))
+  const projectsByMemberId = record.snapshot.tasks.reduce<Map<string, DeletedArchiveProject[]>>(
+    (groups, task) => {
+      const existingProjects = groups.get(task.ownerId) ?? []
+      groups.set(task.ownerId, [
+        ...existingProjects,
+        {
+          id: task.id,
+          title: task.title,
+          priority: task.priority,
+          status: task.status,
+          startDate: task.startDate,
+          endDate: task.endDate,
+        },
+      ])
+      return groups
+    },
+    new Map(),
+  )
+  const memberProjectGroups = record.snapshot.members.map((member) => ({
+    memberId: member.id,
+    memberName: member.name,
+    memberRole: member.role,
+    projects: projectsByMemberId.get(member.id) ?? [],
+  }))
+  const unmatchedProjectGroups = Array.from(
+    record.snapshot.tasks
+      .filter((task) => !archivedMemberIds.has(task.ownerId))
+      .reduce<Map<string, DeletedArchiveProject[]>>((groups, task) => {
+        const ownerName = task.ownerName || '未匹配负责人'
+        const existingProjects = groups.get(ownerName) ?? []
+        groups.set(ownerName, [
+          ...existingProjects,
+          {
+            id: task.id,
+            title: task.title,
+            priority: task.priority,
+            status: task.status,
+            startDate: task.startDate,
+            endDate: task.endDate,
+          },
+        ])
+        return groups
+      }, new Map()),
+  ).map(([ownerName, projects]) => ({
+    memberId: `unmatched-${ownerName}`,
+    memberName: ownerName,
+    memberRole: '历史项目负责人未在本次成员快照中',
+    projects,
+  }))
+
+  return {
+    id: record.id,
+    actor: record.actor,
+    teamName: record.teamName,
+    memberCount: record.memberCount,
+    taskCount: record.taskCount,
+    createdAt: formatAuditTimeLabelFromApi(record.createdAt),
+    memberProjectGroups: [...memberProjectGroups, ...unmatchedProjectGroups],
   }
 }
 
@@ -1586,6 +1714,12 @@ function App() {
     items: SEEDED_OPERATION_RECORDS.slice(0, RECORD_PAGE_SIZE),
     total: SEEDED_OPERATION_RECORDS.length,
   })
+  const [deletedArchiveRecordState, setDeletedArchiveRecordState] = useState<
+    RecordCollectionState<DeletedResourceArchive>
+  >({
+    items: [],
+    total: 0,
+  })
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true)
   const [isExporting, setIsExporting] = useState(false)
@@ -1890,9 +2024,18 @@ function App() {
         return
       }
 
-      const payload = await fetchOperationRecords(nextPage, RECORD_PAGE_SIZE)
-      setOperationRecordState({
-        items: payload.items.map(mapApiOperationRecordToOperationRecord),
+      if (nextView === '操作记录') {
+        const payload = await fetchOperationRecords(nextPage, RECORD_PAGE_SIZE)
+        setOperationRecordState({
+          items: payload.items.map(mapApiOperationRecordToOperationRecord),
+          total: payload.total,
+        })
+        return
+      }
+
+      const payload = await fetchDeletedResourceArchives(nextPage, RECORD_PAGE_SIZE)
+      setDeletedArchiveRecordState({
+        items: payload.items.map(mapApiDeletedArchiveToDeletedResourceArchive),
         total: payload.total,
       })
     } catch (error) {
@@ -2360,11 +2503,32 @@ function App() {
   const recordTotalCount =
     recordView === '更新记录'
       ? releaseRecordState.total
-      : operationRecordState.total
+      : recordView === '操作记录'
+        ? operationRecordState.total
+        : deletedArchiveRecordState.total
   const recordTotalPages = Math.max(1, Math.ceil(recordTotalCount / RECORD_PAGE_SIZE))
   const effectiveRecordPage = Math.min(recordPage, recordTotalPages)
   const visibleUpdateRecords = releaseRecordState.items
   const visibleOperationRecords = operationRecordState.items
+  const visibleDeletedArchiveRecords = deletedArchiveRecordState.items
+  const recordViewTitle =
+    recordView === '更新记录'
+      ? '版本更新记录'
+      : recordView === '操作记录'
+        ? '操作审计记录'
+        : '历史删除组人项目'
+  const recordViewCopy =
+    recordView === '更新记录'
+      ? '记录每个版本的发布时间与新增能力，方便做对外同步与里程碑复盘。'
+      : recordView === '操作记录'
+        ? '记录关键操作的执行人、时间和对象，便于做审计追踪与问题回溯。'
+        : '保存被二次确认删除的项目组、成员和项目快照，方便误删排查和历史追溯。'
+  const recordViewCountLabel =
+    recordView === '更新记录'
+      ? '版本记录'
+      : recordView === '操作记录'
+        ? '操作记录'
+        : '删除归档'
   const overviewTaskIds = useMemo(() => overviewTasks.map((task) => task.id), [overviewTasks])
   const overviewVisibleTaskIds = useMemo(
     () => overviewVisibleTasks.map((task) => task.id),
@@ -2716,10 +2880,21 @@ function App() {
           return
         }
 
-        const payload = await fetchOperationRecords(effectiveRecordPage, RECORD_PAGE_SIZE)
+        if (recordView === '操作记录') {
+          const payload = await fetchOperationRecords(effectiveRecordPage, RECORD_PAGE_SIZE)
+          if (!cancelled) {
+            setOperationRecordState({
+              items: payload.items.map(mapApiOperationRecordToOperationRecord),
+              total: payload.total,
+            })
+          }
+          return
+        }
+
+        const payload = await fetchDeletedResourceArchives(effectiveRecordPage, RECORD_PAGE_SIZE)
         if (!cancelled) {
-          setOperationRecordState({
-            items: payload.items.map(mapApiOperationRecordToOperationRecord),
+          setDeletedArchiveRecordState({
+            items: payload.items.map(mapApiDeletedArchiveToDeletedResourceArchive),
             total: payload.total,
           })
         }
@@ -3390,10 +3565,23 @@ function App() {
       return
     }
 
+    const teamMembers = workspace.members.filter((member) => member.teamId === teamId)
+    const teamMemberIdSet = new Set(teamMembers.map((member) => member.id))
+    const linkedTasks = workspace.tasks.filter(
+      (task) => task.teamId === teamId || teamMemberIdSet.has(task.ownerId),
+    )
+
     setResourceDeleteTarget({
       kind: 'team',
       id: teamId,
       name: team.name,
+      cascade: {
+        memberCount: teamMembers.length,
+        taskCount: linkedTasks.length,
+        memberNames: teamMembers.slice(0, 5).map((member) => member.name),
+        taskTitles: linkedTasks.slice(0, 5).map((task) => task.title),
+        confirmed: teamMembers.length === 0 && linkedTasks.length === 0,
+      },
     })
   }
 
@@ -3536,21 +3724,49 @@ function App() {
     if (!team) {
       return
     }
+    const cascadeMeta = resourceDeleteTarget?.kind === 'team' ? resourceDeleteTarget.cascade : null
+    const shouldCascade = Boolean(cascadeMeta && (cascadeMeta.memberCount > 0 || cascadeMeta.taskCount > 0))
+
+    if (shouldCascade && !cascadeMeta?.confirmed) {
+      setResourceNotice({
+        tone: 'danger',
+        message: '请先确认组内成员和项目都不再需要，系统才会执行级联删除。',
+      })
+      return
+    }
+    const deletingMemberIds = new Set(
+      workspace.members.filter((member) => member.teamId === teamId).map((member) => member.id),
+    )
 
     try {
-      await deleteTeamRequest(teamId)
+      await deleteTeamRequest(teamId, { cascade: shouldCascade })
       if (teamFilter === teamId) {
         setTeamFilter('全部团队')
       }
+      if (selectedResourceTeamId === teamId) {
+        const nextTeam = workspace.teams.find((item) => item.id !== teamId)
+        setSelectedResourceTeamId(nextTeam?.id ?? '')
+      }
+      if (deletingMemberIds.has(selectedResourceMemberId)) {
+        const nextMember = workspace.members.find((item) => !deletingMemberIds.has(item.id))
+        setSelectedResourceMemberId(nextMember?.id ?? '')
+      }
+      setTimelineMemberFilter((current) => current.filter((memberId) => !deletingMemberIds.has(memberId)))
+      setOverviewOwnerFilter((current) => current.filter((memberId) => !deletingMemberIds.has(memberId)))
       setResourceNotice({
         tone: 'success',
-        message: `团队“${team.name}”已删除。`,
+        message: shouldCascade
+          ? `团队“${team.name}”及关联成员、项目已删除，删除快照已归档到记录中心。`
+          : `团队“${team.name}”已删除。`,
       })
       setResourceDeleteTarget(null)
       if (teamEditor?.teamId === teamId) {
         setTeamEditor(null)
       }
       await refreshWorkspace()
+      if (activeNav === '记录中心' || recordView === '历史删除组人项目') {
+        await refreshRecordPage('历史删除组人项目', recordView === '历史删除组人项目' ? recordPage : 1)
+      }
     } catch (error) {
       setResourceNotice({
         tone: 'danger',
@@ -4522,9 +4738,9 @@ function App() {
             <header className="topbar records-topbar">
               <div className="topbar-main">
                 <p className="caps">记录中心</p>
-                <h2>更新记录与操作记录</h2>
+                <h2>更新记录、操作记录与删除归档</h2>
                 <p className="timeline-copy">
-                  将版本迭代与日常操作拆开管理，既方便对外汇报，也方便内部追溯每次增删改导出动作。
+                  将版本迭代、日常操作和历史删除快照拆开管理，既方便对外汇报，也方便内部追溯关键变更。
                 </p>
               </div>
 
@@ -4535,6 +4751,9 @@ function App() {
                 <span className="summary-tag blue-tag">
                   操作 {operationRecordState.total}
                 </span>
+                <span className="summary-tag neutral-tag">
+                  删除归档 {deletedArchiveRecordState.total}
+                </span>
               </div>
             </header>
 
@@ -4543,12 +4762,8 @@ function App() {
                 <div className="records-toolbar">
                   <div>
                     <p className="caps">列表表格</p>
-                    <h3>{recordView === '更新记录' ? '版本更新记录' : '操作审计记录'}</h3>
-                    <p className="timeline-copy">
-                      {recordView === '更新记录'
-                        ? '记录每个版本的发布时间与新增能力，方便做对外同步与里程碑复盘。'
-                        : '记录关键操作的执行人、时间和对象，便于做审计追踪与问题回溯。'}
-                    </p>
+                    <h3>{recordViewTitle}</h3>
+                    <p className="timeline-copy">{recordViewCopy}</p>
                   </div>
 
                   <div className="records-toolbar-actions">
@@ -4564,15 +4779,14 @@ function App() {
                       >
                         <option value="更新记录">更新记录</option>
                         <option value="操作记录">操作记录</option>
+                        <option value="历史删除组人项目">历史删除组人项目</option>
                       </select>
                     </label>
                   </div>
                 </div>
 
                 <div className="records-meta-bar">
-                  <span>
-                    {recordView === '更新记录' ? '版本记录' : '操作记录'}共 {recordTotalCount} 条
-                  </span>
+                  <span>{recordViewCountLabel}共 {recordTotalCount} 条</span>
                   <span>每页 {RECORD_PAGE_SIZE} 条</span>
                 </div>
 
@@ -4612,7 +4826,7 @@ function App() {
                         )}
                       </tbody>
                     </table>
-                  ) : (
+                  ) : recordView === '操作记录' ? (
                     <table className="records-table records-table-operations">
                       <thead>
                         <tr>
@@ -4645,6 +4859,88 @@ function App() {
                               </td>
                               <td title={record.detail}>
                                 <span className="records-cell-ellipsis">{record.detail}</span>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <table className="records-table records-table-archives">
+                      <thead>
+                        <tr>
+                          <th>删除时间</th>
+                          <th>操作人</th>
+                          <th>项目组</th>
+                          <th>删除范围</th>
+                          <th>归档内容</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {deletedArchiveRecordState.total === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="records-empty-cell">
+                              还没有历史删除组人项目。
+                            </td>
+                          </tr>
+                        ) : (
+                          visibleDeletedArchiveRecords.map((record) => (
+                            <tr key={record.id}>
+                              <td>{record.createdAt}</td>
+                              <td title={record.actor}>
+                                <span className="records-cell-ellipsis">{record.actor}</span>
+                              </td>
+                              <td title={record.teamName}>
+                                <strong className="records-cell-ellipsis">{record.teamName}</strong>
+                              </td>
+                              <td>
+                                <span className="archive-count-chip">
+                                  {record.memberCount} 人 / {record.taskCount} 项目
+                                </span>
+                              </td>
+                              <td>
+                                <details className="archive-record-detail">
+                                  <summary>查看成员与项目关系</summary>
+                                  <div className="archive-member-project-list">
+                                    {record.memberProjectGroups.length === 0 ? (
+                                      <p className="archive-member-empty">没有可展示的成员项目关系。</p>
+                                    ) : (
+                                      record.memberProjectGroups.map((group) => (
+                                        <section
+                                          className="archive-member-project-group"
+                                          key={group.memberId}
+                                        >
+                                          <div className="archive-member-project-head">
+                                            <div>
+                                              <strong>{group.memberName}</strong>
+                                              <span>{group.memberRole}</span>
+                                            </div>
+                                            <em>{group.projects.length} 个项目</em>
+                                          </div>
+                                          {group.projects.length === 0 ? (
+                                            <p className="archive-member-empty">
+                                              该成员在本次删除中没有负责归档项目。
+                                            </p>
+                                          ) : (
+                                            <ul className="archive-project-list">
+                                              {group.projects.map((project) => (
+                                                <li key={project.id}>
+                                                  <strong>{project.title}</strong>
+                                                  <span>
+                                                    {project.startDate} ~ {project.endDate}
+                                                  </span>
+                                                  <em>
+                                                    {project.priority} · {project.status}
+                                                  </em>
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          )}
+                                        </section>
+                                      ))
+                                    )}
+                                  </div>
+                                </details>
                               </td>
                             </tr>
                           ))
@@ -6426,9 +6722,56 @@ function App() {
             </div>
             <p className="detail-copy">
               {resourceDeleteTarget.kind === 'team'
-                ? `团队“${resourceDeleteTarget.name}”删除后将不再出现在筛选与组织管理中。若仍关联成员或项目，系统会阻止本次删除。`
+                ? resourceDeleteTarget.cascade.memberCount > 0 || resourceDeleteTarget.cascade.taskCount > 0
+                  ? `团队“${resourceDeleteTarget.name}”下还有 ${resourceDeleteTarget.cascade.memberCount} 名成员、${resourceDeleteTarget.cascade.taskCount} 个项目。确认都不需要后，系统会同步删除并先归档到记录中心 > 历史删除组人项目。`
+                  : `团队“${resourceDeleteTarget.name}”当前没有关联成员和项目，删除后将不再出现在筛选与组织管理中。`
                 : `成员“${resourceDeleteTarget.name}”删除后将不再出现在排期工作台中。若仍负责项目，系统会阻止本次删除。`}
             </p>
+            {resourceDeleteTarget.kind === 'team' &&
+            (resourceDeleteTarget.cascade.memberCount > 0 ||
+              resourceDeleteTarget.cascade.taskCount > 0) ? (
+              <div className="cascade-delete-review">
+                <div className="cascade-delete-review-grid">
+                  <span>成员</span>
+                  <strong>{resourceDeleteTarget.cascade.memberCount} 人</strong>
+                  <small>
+                    {resourceDeleteTarget.cascade.memberNames.length > 0
+                      ? resourceDeleteTarget.cascade.memberNames.join('、')
+                      : '暂无成员'}
+                  </small>
+                </div>
+                <div className="cascade-delete-review-grid">
+                  <span>项目</span>
+                  <strong>{resourceDeleteTarget.cascade.taskCount} 个</strong>
+                  <small>
+                    {resourceDeleteTarget.cascade.taskTitles.length > 0
+                      ? resourceDeleteTarget.cascade.taskTitles.join('、')
+                      : '暂无项目'}
+                  </small>
+                </div>
+                <label className="cascade-delete-confirm">
+                  <input
+                    checked={resourceDeleteTarget.cascade.confirmed}
+                    onChange={(event) => {
+                      const confirmed = event.target.checked
+                      setResourceDeleteTarget((current) =>
+                        current?.kind === 'team'
+                          ? {
+                              ...current,
+                              cascade: {
+                                ...current.cascade,
+                                confirmed,
+                              },
+                            }
+                          : current,
+                      )
+                    }}
+                    type="checkbox"
+                  />
+                  <span>我确认这个项目组下的成员和项目都不再需要，可以删除并归档。</span>
+                </label>
+              </div>
+            ) : null}
             <div className="dialog-actions">
               <button className="ghost-button" onClick={() => setResourceDeleteTarget(null)}>
                 取消
@@ -6440,8 +6783,18 @@ function App() {
                     ? handleDeleteTeam(resourceDeleteTarget.id)
                     : handleDeleteMember(resourceDeleteTarget.id)
                 }
+                disabled={
+                  resourceDeleteTarget.kind === 'team' &&
+                  (resourceDeleteTarget.cascade.memberCount > 0 ||
+                    resourceDeleteTarget.cascade.taskCount > 0) &&
+                  !resourceDeleteTarget.cascade.confirmed
+                }
               >
-                确认删除
+                {resourceDeleteTarget.kind === 'team' &&
+                (resourceDeleteTarget.cascade.memberCount > 0 ||
+                  resourceDeleteTarget.cascade.taskCount > 0)
+                  ? '确认删除并归档'
+                  : '确认删除'}
               </button>
             </div>
           </div>

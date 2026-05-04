@@ -145,11 +145,42 @@ def test_delete_protection_and_conflict_messages(client):
     headers = _auth_headers(client)
     delete_team = client.delete("/api/teams/strategy", headers=headers)
     assert delete_team.status_code == 409
-    assert "仍关联" in delete_team.get_json()["error"]
+    delete_team_payload = delete_team.get_json()
+    assert "仍关联" in delete_team_payload["error"]
+    assert delete_team_payload["requiresCascadeConfirmation"] is True
+    assert delete_team_payload["memberCount"] == 2
+    assert delete_team_payload["taskCount"] >= 1
 
     delete_member = client.delete("/api/members/xuheng", headers=headers)
     assert delete_member.status_code == 409
     assert "仍负责" in delete_member.get_json()["error"]
+
+
+def test_confirmed_team_delete_archives_members_and_tasks(client):
+    """Cascade team deletion should archive the removed resource graph first."""
+
+    headers = _auth_headers(client)
+    delete_team = client.delete("/api/teams/strategy", json={"cascade": True}, headers=headers)
+    assert delete_team.status_code == 200
+
+    bootstrap = client.get("/api/bootstrap", headers=headers).get_json()
+    assert all(team["id"] != "strategy" for team in bootstrap["teams"])
+    assert all(member["teamId"] != "strategy" for member in bootstrap["members"])
+    assert all(task["teamId"] != "strategy" and task["ownerId"] not in {"linqing", "mina"} for task in bootstrap["tasks"])
+
+    archives_response = client.get("/api/deleted-resource-archives?page=1&size=5", headers=headers)
+    assert archives_response.status_code == 200
+    archives_payload = archives_response.get_json()
+    assert archives_payload["total"] == 1
+    archive = archives_payload["items"][0]
+    assert archive["teamName"] == "产品策略组"
+    assert archive["memberCount"] == 2
+    assert archive["taskCount"] >= 1
+    assert [member["name"] for member in archive["snapshot"]["members"]] == ["林青", "米娜"]
+    assert any(task["ownerName"] in {"林青", "米娜"} for task in archive["snapshot"]["tasks"])
+
+    operation_records = client.get("/api/operation-records?page=1&size=10", headers=headers).get_json()["items"]
+    assert any("同步归档" in item["detail"] for item in operation_records)
 
 
 def test_pagination_view_logging_and_export(client):

@@ -7,15 +7,16 @@ from math import ceil
 import re
 
 from flask import Response, current_app, g, jsonify, request
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from ..extensions import db
-from ..models import Account, Member, OperationRecord, ReleaseRecord, Task, Team
+from ..models import Account, DeletedResourceArchive, Member, OperationRecord, ReleaseRecord, Task, Team
 from ..seed import seed_database
 from ..serializers import (
     serialize_account,
+    serialize_deleted_resource_archive,
     serialize_member,
     serialize_operation_record,
     serialize_release_record,
@@ -41,8 +42,15 @@ ALLOWED_AVATAR_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp
 AVATAR_DATA_URL_PATTERN = re.compile(r"^data:(?P<mime>image/[a-zA-Z0-9.+-]+);base64,(?P<data>.+)$", re.DOTALL)
 
 
-def _json_error(message: str, status_code: int) -> tuple[Response, int]:
-    return jsonify({"error": message}), status_code
+def _json_error(
+    message: str,
+    status_code: int,
+    extra: dict[str, object] | None = None,
+) -> tuple[Response, int]:
+    payload: dict[str, object] = {"error": message}
+    if extra:
+        payload.update(extra)
+    return jsonify(payload), status_code
 
 
 def _read_json_body() -> dict[str, object]:
@@ -297,6 +305,55 @@ def _count_by_column(model, column, value: object) -> int:
 
     count_value = db.session.scalar(select(func.count()).select_from(model).where(column == value))
     return int(count_value or 0)
+
+
+def _team_cascade_resources(team_id: str) -> tuple[list[Member], list[Task]]:
+    """Load the people and projects that would be removed with a team.
+
+    We include projects by team and by owner because older data or manual DB
+    edits can leave one side out of sync. The `OR` condition keeps cascade
+    deletion safe even when the denormalized task.team_id value drifted.
+    """
+
+    members = (
+        Member.query.filter(Member.team_id == team_id)
+        .order_by(Member.sort_order.asc(), Member.created_at.asc())
+        .all()
+    )
+    member_ids = [member.id for member in members]
+    task_filter = Task.team_id == team_id
+    if member_ids:
+        task_filter = or_(task_filter, Task.owner_id.in_(member_ids))
+    tasks = Task.query.filter(task_filter).order_by(Task.sort_order.asc(), Task.updated_at.desc()).all()
+    return members, tasks
+
+
+def _serialize_member_for_archive(member: Member) -> dict[str, object]:
+    """Serialize member archive data without storing heavy uploaded images."""
+
+    payload = serialize_member(member)
+    payload.pop("avatarImageUrl", None)
+    return payload
+
+
+def _serialize_task_for_archive(task: Task, members_by_id: dict[str, Member]) -> dict[str, object]:
+    """Serialize task archive data and keep the deleted owner name readable."""
+
+    payload = serialize_task(task)
+    owner = members_by_id.get(task.owner_id)
+    payload["ownerName"] = owner.name if owner is not None else "已删除成员"
+    return payload
+
+
+def _build_deleted_team_snapshot(team: Team, members: list[Member], tasks: list[Task]) -> dict[str, object]:
+    """Build the JSON snapshot shown later in Record Center."""
+
+    members_by_id = {member.id: member for member in members}
+    return {
+        "team": serialize_team(team),
+        "members": [_serialize_member_for_archive(member) for member in members],
+        "tasks": [_serialize_task_for_archive(task, members_by_id) for task in tasks],
+    }
 
 
 def _validate_task_payload(payload: dict[str, object], partial: bool = False) -> dict[str, object]:
@@ -654,19 +711,75 @@ def delete_team(team_id: str) -> Response:
     if team is None:
         return _json_error("团队不存在。", 404)
 
-    member_count = _count_by_column(Member, Member.team_id, team_id)
-    task_count = _count_by_column(Task, Task.team_id, team_id)
+    payload = _read_json_body()
+    cascade_confirmed = bool(payload.get("cascade"))
+    members_to_delete, tasks_to_delete = _team_cascade_resources(team_id)
+    member_count = len(members_to_delete)
+    task_count = len(tasks_to_delete)
     if member_count > 0 or task_count > 0:
-        return _json_error(
-            f"团队“{team.name}”仍关联 {member_count} 名成员和 {task_count} 个项目，请先迁移或清理后再删除。",
-            409,
-        )
+        if not cascade_confirmed:
+            return _json_error(
+                f"团队“{team.name}”仍关联 {member_count} 名成员和 {task_count} 个项目，请二次确认是否同步删除。",
+                409,
+                {
+                    "requiresCascadeConfirmation": True,
+                    "memberCount": member_count,
+                    "taskCount": task_count,
+                    "memberNames": [member.name for member in members_to_delete[:8]],
+                    "taskTitles": [task.title for task in tasks_to_delete[:8]],
+                },
+            )
 
-    append_operation_record("删除", f"团队 / {team.name}", "已从当前工作区移除团队。", actor=_actor_label())
+        current_time = now_local()
+        actor = _actor_label()
+        archive = DeletedResourceArchive(
+            id=generate_id("deleted-archive"),
+            actor=actor,
+            team_id=team.id,
+            team_name=team.name,
+            member_count=member_count,
+            task_count=task_count,
+            snapshot=_build_deleted_team_snapshot(team, members_to_delete, tasks_to_delete),
+            created_at=current_time,
+        )
+        db.session.add(archive)
+
+        deleted_member_ids = [member.id for member in members_to_delete]
+        deleted_member_names = [member.name for member in members_to_delete]
+        if deleted_member_ids:
+            Account.query.filter(Account.member_id.in_(deleted_member_ids)).update(
+                {"is_active": False, "member_id": None, "updated_at": current_time},
+                synchronize_session=False,
+            )
+        if deleted_member_names:
+            Team.query.filter(Team.id != team.id, Team.lead.in_(deleted_member_names)).update(
+                {"lead": "待设置", "updated_at": current_time},
+                synchronize_session=False,
+            )
+
+        for task in tasks_to_delete:
+            db.session.delete(task)
+        for member in members_to_delete:
+            db.session.delete(member)
+
+        append_operation_record(
+            "删除",
+            f"团队 / {team.name}",
+            f"已二次确认删除团队，并同步归档 {member_count} 名成员和 {task_count} 个项目到记录中心。",
+            actor=actor,
+        )
+    else:
+        append_operation_record("删除", f"团队 / {team.name}", "已从当前工作区移除团队。", actor=_actor_label())
+
     db.session.delete(team)
+    db.session.flush()
     remaining_teams = _ordered_teams_query().all()
     for index, item in enumerate(remaining_teams):
         item.sort_order = index
+    remaining_members = _ordered_members_query().all()
+    rebalance_sort_orders(remaining_members)
+    remaining_tasks = _ordered_tasks_query().all()
+    rebalance_sort_orders(remaining_tasks)
     db.session.commit()
     return jsonify({"success": True})
 
@@ -904,6 +1017,19 @@ def list_operation_records() -> Response:
     return jsonify(_paginate(query, serialize_operation_record, total, page, size))
 
 
+@api_blueprint.get("/deleted-resource-archives")
+@_require_account
+def list_deleted_resource_archives() -> Response:
+    page = parse_int_value(request.args.get("page", 1), "page", 1)
+    size = parse_int_value(request.args.get("size", 10), "size", 1, 100)
+    query = DeletedResourceArchive.query.order_by(
+        DeletedResourceArchive.created_at.desc(),
+        DeletedResourceArchive.id.desc(),
+    )
+    total = count_rows(DeletedResourceArchive)
+    return jsonify(_paginate(query, serialize_deleted_resource_archive, total, page, size))
+
+
 @api_blueprint.post("/operation-records/view")
 @_require_account
 def create_view_operation_record() -> Response:
@@ -937,6 +1063,7 @@ def export_workspace() -> Response:
     tasks = _ordered_tasks_query().all()
     update_records = ReleaseRecord.query.order_by(ReleaseRecord.updated_at.desc()).all()
     operation_records = OperationRecord.query.order_by(OperationRecord.created_at.desc()).all()
+    deleted_archives = DeletedResourceArchive.query.order_by(DeletedResourceArchive.created_at.desc()).all()
     db.session.commit()
     return jsonify(
         {
@@ -945,5 +1072,8 @@ def export_workspace() -> Response:
             "tasks": [serialize_task(task) for task in tasks],
             "updateRecords": [serialize_release_record(record) for record in update_records],
             "operationRecords": [serialize_operation_record(record) for record in operation_records],
+            "deletedResourceArchives": [
+                serialize_deleted_resource_archive(record) for record in deleted_archives
+            ],
         }
     )

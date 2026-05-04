@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.dialects.mysql import LONGTEXT
@@ -164,4 +164,28 @@ class OperationRecord(db.Model):
     action: Mapped[str] = mapped_column(String(32), nullable=False)
     target: Mapped[str] = mapped_column(String(200), nullable=False)
     detail: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class DeletedResourceArchive(db.Model):
+    """Snapshot of team/member/project data removed by a confirmed cascade delete.
+
+    This archive gives the record center a lightweight safety net: managers can
+    see exactly which group, people and projects were removed without keeping
+    those rows active in the main planning tables.
+    """
+
+    __tablename__ = "deleted_resource_archives"
+    __table_args__ = (
+        Index("ix_deleted_resource_archives_created_at", "created_at"),
+        Index("ix_deleted_resource_archives_team_name", "team_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    actor: Mapped[str] = mapped_column(String(120), nullable=False)
+    team_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    team_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    member_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    task_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    snapshot: Mapped[Dict[str, object]] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

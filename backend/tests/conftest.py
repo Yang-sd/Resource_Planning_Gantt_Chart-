@@ -74,6 +74,7 @@ def _truncate_all_tables() -> None:
         "TRUNCATE TABLE teams",
         "TRUNCATE TABLE release_records",
         "TRUNCATE TABLE operation_records",
+        "TRUNCATE TABLE deleted_resource_archives",
         "SET FOREIGN_KEY_CHECKS = 1",
     ]
     with db.engine.begin() as connection:

@@ -56,6 +56,23 @@ export type ApiOperationRecord = {
   time: string
 }
 
+export type ApiDeletedResourceArchiveSnapshot = {
+  team: ApiTeam
+  members: Array<Omit<ApiMember, 'avatarImageUrl'>>
+  tasks: Array<ApiTask & { ownerName: string }>
+}
+
+export type ApiDeletedResourceArchive = {
+  id: string
+  actor: string
+  teamId: string
+  teamName: string
+  memberCount: number
+  taskCount: number
+  snapshot: ApiDeletedResourceArchiveSnapshot
+  createdAt: string
+}
+
 export type ApiAccountRole = 'admin' | 'team_lead' | 'member'
 
 export type ApiAccount = {
@@ -197,6 +214,12 @@ export async function fetchOperationRecords(page: number, size: number) {
   return request<PaginatedResponse<ApiOperationRecord>>(`/operation-records?page=${page}&size=${size}`)
 }
 
+export async function fetchDeletedResourceArchives(page: number, size: number) {
+  return request<PaginatedResponse<ApiDeletedResourceArchive>>(
+    `/deleted-resource-archives?page=${page}&size=${size}`,
+  )
+}
+
 export async function createViewOperationRecord(payload: {
   target: string
   detail: string
@@ -225,9 +248,10 @@ export async function updateTeam(
   })
 }
 
-export async function deleteTeam(teamId: string) {
+export async function deleteTeam(teamId: string, options?: { cascade?: boolean }) {
   return request<{ success: boolean }>(`/teams/${teamId}`, {
     method: 'DELETE',
+    body: options?.cascade ? JSON.stringify({ cascade: true }) : undefined,
   })
 }
 

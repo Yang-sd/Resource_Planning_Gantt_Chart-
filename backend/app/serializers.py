@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from .models import Account, Member, OperationRecord, ReleaseRecord, Task, Team
+from .models import Account, DeletedResourceArchive, Member, OperationRecord, ReleaseRecord, Task, Team
 
 
 PRIORITY_COLOR_MAP = {
@@ -164,4 +164,20 @@ def serialize_operation_record(record: OperationRecord) -> dict[str, object]:
         "target": record.target,
         "detail": record.detail,
         "time": _serialize_datetime(record.created_at),
+    }
+
+
+def serialize_deleted_resource_archive(record: DeletedResourceArchive) -> dict[str, object]:
+    """Serialize archived cascade-delete snapshots for the record center."""
+
+    snapshot = record.snapshot or {}
+    return {
+        "id": record.id,
+        "actor": record.actor,
+        "teamId": record.team_id,
+        "teamName": record.team_name,
+        "memberCount": record.member_count,
+        "taskCount": record.task_count,
+        "snapshot": snapshot,
+        "createdAt": _serialize_datetime(record.created_at),
     }

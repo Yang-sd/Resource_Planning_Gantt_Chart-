@@ -598,6 +598,11 @@
   color: #dc2626;
 }
 
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .icon-button {
   color: #51607d;
 }
@@ -913,7 +918,27 @@
   width: 210px;
 }
 
+.records-table-archives th:nth-child(1) {
+  width: 172px;
+}
+
+.records-table-archives th:nth-child(2) {
+  width: 112px;
+}
+
+.records-table-archives th:nth-child(3) {
+  width: 160px;
+}
+
+.records-table-archives th:nth-child(4) {
+  width: 132px;
+}
+
 .records-table-operations td {
+  vertical-align: middle;
+}
+
+.records-table-archives td {
   vertical-align: middle;
 }
 
@@ -935,6 +960,129 @@
   font-weight: 700;
   min-height: 22px;
   padding: 0 8px;
+}
+
+.archive-count-chip {
+  align-items: center;
+  background: rgba(14, 165, 233, 0.1);
+  border: 1px solid rgba(14, 165, 233, 0.18);
+  border-radius: 999px;
+  color: #0284c7;
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 800;
+  min-height: 24px;
+  padding: 0 9px;
+  white-space: nowrap;
+}
+
+.archive-record-detail {
+  color: #51607d;
+}
+
+.archive-record-detail summary {
+  color: #5568ff;
+  cursor: pointer;
+  font-weight: 800;
+  list-style-position: inside;
+}
+
+.archive-record-detail span {
+  color: #7f8aa3;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.archive-record-detail p {
+  color: #42516f;
+  margin: 0;
+  max-height: 58px;
+  overflow: auto;
+}
+
+.archive-member-project-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.archive-member-project-group {
+  background: rgba(85, 104, 255, 0.07);
+  border: 1px solid rgba(85, 104, 255, 0.16);
+  border-radius: 14px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.archive-member-project-head {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.archive-member-project-head div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.archive-member-project-head strong {
+  color: #162032;
+  font-size: 13px;
+}
+
+.archive-member-project-head em {
+  background: rgba(14, 165, 233, 0.1);
+  border-radius: 999px;
+  color: #0284c7;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  padding: 4px 8px;
+}
+
+.archive-project-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.archive-project-list li {
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(191, 201, 219, 0.34);
+  border-radius: 12px;
+  display: grid;
+  gap: 3px;
+  padding: 8px 9px;
+}
+
+.archive-project-list strong {
+  color: #24324b;
+  font-size: 12.5px;
+}
+
+.archive-project-list span,
+.archive-project-list em,
+.archive-member-empty {
+  color: #7f8aa3;
+  font-size: 11px;
+}
+
+.archive-project-list em {
+  font-style: normal;
+  font-weight: 800;
+}
+
+.archive-member-empty {
+  margin: 0;
 }
 
 .records-table-footer {
@@ -3375,6 +3523,55 @@
   max-width: 380px;
 }
 
+.cascade-delete-review {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(245, 158, 11, 0.08) 100%);
+  border: 1px solid rgba(239, 68, 68, 0.16);
+  border-radius: 18px;
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+}
+
+.cascade-delete-review-grid {
+  display: grid;
+  gap: 3px;
+}
+
+.cascade-delete-review-grid span,
+.cascade-delete-confirm {
+  color: #7f8aa3;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.cascade-delete-review-grid strong {
+  color: #162032;
+  font-size: 16px;
+}
+
+.cascade-delete-review-grid small {
+  color: #51607d;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.cascade-delete-confirm {
+  align-items: flex-start;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(239, 68, 68, 0.14);
+  border-radius: 14px;
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  line-height: 1.45;
+  padding: 10px;
+}
+
+.cascade-delete-confirm input {
+  margin-top: 2px;
+}
+
 .profile-dialog {
   max-width: 520px;
 }
@@ -3772,6 +3969,10 @@
 .dashboard-shell.theme-dark .resource-nav-item,
 .dashboard-shell.theme-dark .resource-editor-preview,
 .dashboard-shell.theme-dark .profile-editor-preview,
+.dashboard-shell.theme-dark .cascade-delete-review,
+.dashboard-shell.theme-dark .cascade-delete-confirm,
+.dashboard-shell.theme-dark .archive-member-project-group,
+.dashboard-shell.theme-dark .archive-project-list li,
 .dashboard-shell.theme-dark .resource-metric-card {
   background: linear-gradient(180deg, var(--dark-surface-raised) 0%, var(--dark-surface-strong) 100%);
   border-color: var(--dark-border-strong);
@@ -3938,6 +4139,10 @@
 .dashboard-shell.theme-dark .resource-metric-card strong,
 .dashboard-shell.theme-dark .resource-detail-section h5,
 .dashboard-shell.theme-dark .person-meta strong,
+.dashboard-shell.theme-dark .cascade-delete-review-grid strong,
+.dashboard-shell.theme-dark .archive-record-detail p,
+.dashboard-shell.theme-dark .archive-member-project-head strong,
+.dashboard-shell.theme-dark .archive-project-list strong,
 .dashboard-shell.theme-dark .table-row span:first-child {
   color: var(--dark-text);
 }
@@ -3955,6 +4160,14 @@
 .dashboard-shell.theme-dark .records-table th,
 .dashboard-shell.theme-dark .records-table td,
 .dashboard-shell.theme-dark .record-feature-list li,
+.dashboard-shell.theme-dark .archive-record-detail,
+.dashboard-shell.theme-dark .archive-record-detail span,
+.dashboard-shell.theme-dark .archive-project-list span,
+.dashboard-shell.theme-dark .archive-project-list em,
+.dashboard-shell.theme-dark .archive-member-empty,
+.dashboard-shell.theme-dark .cascade-delete-review-grid span,
+.dashboard-shell.theme-dark .cascade-delete-review-grid small,
+.dashboard-shell.theme-dark .cascade-delete-confirm,
 .dashboard-shell.theme-dark .overview-selection-hint,
 .dashboard-shell.theme-dark .table-head,
 .dashboard-shell.theme-dark .table-page-status,
@@ -4106,6 +4319,7 @@
 
 .dashboard-shell.theme-dark .month-chip-action,
 .dashboard-shell.theme-dark .record-action-chip,
+.dashboard-shell.theme-dark .archive-count-chip,
 .dashboard-shell.theme-dark .activity-launcher-count,
 .dashboard-shell.theme-dark .resource-count-badge,
 .dashboard-shell.theme-dark .resource-meta-pill {

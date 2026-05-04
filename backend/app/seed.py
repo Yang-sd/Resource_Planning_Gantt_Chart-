@@ -11,6 +11,25 @@ from .services import now_local
 
 SEEDED_RELEASE_RECORDS = [
     {
+        "id": "release-20",
+        "version": "v1.10.2",
+        "updated_at": datetime(2026, 5, 4, 22, 20),
+        "features": [
+            "优化记录中心删除归档详情，改为按成员分组展示对应负责项目。",
+            "每个归档项目补充日期、优先级和状态，方便回溯删除前的人力分工关系。",
+        ],
+    },
+    {
+        "id": "release-19",
+        "version": "v1.10.1",
+        "updated_at": datetime(2026, 5, 4, 20, 10),
+        "features": [
+            "删除项目组时新增二次确认，明确提示组内成员和对应项目是否同步删除，避免误删。",
+            "确认删除后会先把团队、成员和项目核心字段归档到记录中心，保留历史追溯入口。",
+            "记录中心新增“历史删除组人项目”下拉视图，可查看删除时间、操作人、项目组和归档明细。",
+        ],
+    },
+    {
         "id": "release-18",
         "version": "v1.10.0",
         "updated_at": datetime(2026, 5, 4, 18, 35),
