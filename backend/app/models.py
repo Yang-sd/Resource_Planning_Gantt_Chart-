@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Optional
+from typing import List, Optional
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.dialects.mysql import LONGTEXT
@@ -34,8 +34,8 @@ class Team(db.Model, TimestampMixin):
     color: Mapped[str] = mapped_column(String(16), nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    members: Mapped[list["Member"]] = relationship("Member", back_populates="team")
-    tasks: Mapped[list["Task"]] = relationship("Task", back_populates="team")
+    members: Mapped[List["Member"]] = relationship("Member", back_populates="team")
+    tasks: Mapped[List["Task"]] = relationship("Task", back_populates="team")
 
 
 class Member(db.Model, TimestampMixin):
@@ -65,8 +65,8 @@ class Member(db.Model, TimestampMixin):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     team: Mapped[Team] = relationship("Team", back_populates="members")
-    tasks: Mapped[list["Task"]] = relationship("Task", back_populates="owner")
-    accounts: Mapped[list["Account"]] = relationship("Account", back_populates="member")
+    tasks: Mapped[List["Task"]] = relationship("Task", back_populates="owner")
+    accounts: Mapped[List["Account"]] = relationship("Account", back_populates="member")
 
 
 class Account(db.Model, TimestampMixin):
@@ -150,7 +150,7 @@ class ReleaseRecord(db.Model):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     version: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    features: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    features: Mapped[List[str]] = mapped_column(JSON, nullable=False)
 
 
 class OperationRecord(db.Model):

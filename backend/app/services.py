@@ -3,7 +3,11 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from typing import List, Optional, Type, Union
-from zoneinfo import ZoneInfo
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Synology DSM can still ship Python 3.8.
+    from backports.zoneinfo import ZoneInfo
 
 from flask import current_app
 from sqlalchemy import func, select

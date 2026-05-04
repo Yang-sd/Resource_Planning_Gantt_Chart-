@@ -269,9 +269,39 @@ type TimelineDay = {
   isMonthStart: boolean
 }
 
+type TaskCalendarSegment = {
+  key: string
+  left: string
+  width: string
+  label: string
+}
+
+type TaskWorkloadSummary = {
+  naturalDays: number
+  workDays: number
+  restDays: number
+  holidayDays: number
+  weekendDays: number
+  makeupWorkdays: number
+}
+
+type TimelineTaskLayoutItem = {
+  task: Task
+  sourceIndex: number
+  laneIndex: number
+  startOffset: number
+  endOffset: number
+}
+
+type TimelineTaskLayout = {
+  items: TimelineTaskLayoutItem[]
+  laneCount: number
+}
+
 type MemberTimelineRow = {
   member: Member
   tasks: Task[]
+  taskLayout: TimelineTaskLayout
   utilization: number
   freeHours: number
   rowHeight: number
@@ -364,6 +394,47 @@ const CHINA_OFFICIAL_HOLIDAY_CALENDAR_MAP_2026 = buildHolidayCalendarMap(
 )
 
 const SEEDED_UPDATE_RECORDS: ReleaseRecord[] = [
+  {
+    id: 'release-18',
+    version: 'v1.10.0',
+    updatedAt: '2026/05/04 18:35',
+    features: [
+      '修复资源排期中同一成员的非重叠项目仍被强制上下堆叠的问题，现在会自动复用同一泳道，只有时间冲突才上下排列。',
+      '修复节假日斜纹铺满空白时间轴的问题，休息日提示只保留在跨节假日项目条内部，页面干扰更少。',
+      '新增 NAS 轻量部署模式和 PostgreSQL 公共数据库适配，修复 Synology Python 3.8 下类型标注、zoneinfo 和 token 解析兼容问题。',
+      '新增 PostgreSQL 表和字段中文注释，数据库工具中可直接查询项目数据字典。',
+    ],
+  },
+  {
+    id: 'release-17',
+    version: 'v1.9.1',
+    updatedAt: '2026/04/30 15:30',
+    features: [
+      '资源排期新增工作日折算口径，项目条保留自然起止日期，同时展示默认可执行工作日与休息日数量。',
+      '跨节假日项目会在任务条内部用斜纹切出默认不可执行区间，帮助识别五一等假期对交付节奏的影响。',
+      '空白时间轴不再铺满节假日斜纹，节假日说明保留请假、加班应作为人员日历例外维护的产品规则。',
+    ],
+  },
+  {
+    id: 'release-16',
+    version: 'v1.9.0',
+    updatedAt: '2026/04/26 21:10',
+    features: [
+      '组织管理中的团队项目和成员负责项目卡片新增“转交”按钮，可直接把项目交给新的负责人。',
+      '项目转交会自动同步项目所属团队，并在保存后切换到新负责人详情，降低找项目和确认归属的成本。',
+      '补齐 README、部署文档、架构说明、测试说明、版本记录和 Docker 脚本注释，方便后续拉取代码后一键部署。',
+    ],
+  },
+  {
+    id: 'release-15',
+    version: 'v1.8.0',
+    updatedAt: '2026/04/26 18:40',
+    features: [
+      '个人资料弹窗支持上传 PNG、JPG、WebP 和 GIF 头像，单个文件最大 10MB，并持久化到 MySQL。',
+      '头像改为独立图片接口加载，首屏基础数据只返回头像 URL，避免大图片拖慢 bootstrap。',
+      '修改密码流程移除当前密码输入框，只需要填写新密码并确认，账号卡片和成员头像同步支持图片展示。',
+    ],
+  },
   {
     id: 'release-14',
     version: 'v1.7.1',
@@ -946,6 +1017,144 @@ function formatTimelineSpecialDayLabel(dayInfo?: HolidayCalendarDayInfo) {
   return labels.length > 0 ? labels.join('；') : null
 }
 
+function isDefaultWorkingDay(date: Date, holidayCalendarMap = CHINA_OFFICIAL_HOLIDAY_CALENDAR_MAP_2026) {
+  const dateKey = formatDateInputValue(date)
+  const calendarInfo = holidayCalendarMap.get(dateKey)
+  const isMakeupWorkday = (calendarInfo?.makeupWorkdayLabels.length ?? 0) > 0
+
+  if (isMakeupWorkday) {
+    return true
+  }
+
+  const isHoliday = (calendarInfo?.holidayLabels.length ?? 0) > 0
+  const isWeekend = date.getDay() === 0 || date.getDay() === 6
+  return !isHoliday && !isWeekend
+}
+
+function summarizeCalendarWorkload(
+  startDate: Date,
+  endDate: Date,
+  holidayCalendarMap = CHINA_OFFICIAL_HOLIDAY_CALENDAR_MAP_2026,
+): TaskWorkloadSummary {
+  const naturalDays = Math.max(1, diffCalendarDays(endDate, startDate) + 1)
+
+  return Array.from({ length: naturalDays }, (_, index) => addCalendarDays(startDate, index)).reduce(
+    (summary, date) => {
+      const dateKey = formatDateInputValue(date)
+      const calendarInfo = holidayCalendarMap.get(dateKey)
+      const isHoliday = (calendarInfo?.holidayLabels.length ?? 0) > 0
+      const isMakeupWorkday = (calendarInfo?.makeupWorkdayLabels.length ?? 0) > 0
+      const isWeekend = date.getDay() === 0 || date.getDay() === 6
+      const isWorkingDay = isDefaultWorkingDay(date, holidayCalendarMap)
+
+      return {
+        naturalDays: summary.naturalDays,
+        workDays: summary.workDays + (isWorkingDay ? 1 : 0),
+        restDays: summary.restDays + (isWorkingDay ? 0 : 1),
+        holidayDays: summary.holidayDays + (isHoliday ? 1 : 0),
+        weekendDays: summary.weekendDays + (!isHoliday && isWeekend ? 1 : 0),
+        makeupWorkdays: summary.makeupWorkdays + (isMakeupWorkday ? 1 : 0),
+      }
+    },
+    {
+      naturalDays,
+      workDays: 0,
+      restDays: 0,
+      holidayDays: 0,
+      weekendDays: 0,
+      makeupWorkdays: 0,
+    },
+  )
+}
+
+function summarizeTaskCalendarWorkload(task: Pick<Task, 'startOffset' | 'duration'>) {
+  return summarizeCalendarWorkload(getTaskStartDate(task), getTaskEndDate(task))
+}
+
+function formatTaskWorkloadLabel(summary: TaskWorkloadSummary) {
+  if (summary.restDays <= 0) {
+    return `${summary.workDays} 工作日`
+  }
+
+  return `${summary.workDays}工 · ${summary.restDays}休`
+}
+
+function formatTaskWorkloadTooltip(
+  task: Pick<Task, 'startOffset' | 'duration'>,
+  summary: TaskWorkloadSummary,
+) {
+  const restDetail = [
+    summary.holidayDays > 0 ? `法定假期 ${summary.holidayDays} 天` : '',
+    summary.weekendDays > 0 ? `周末 ${summary.weekendDays} 天` : '',
+    summary.makeupWorkdays > 0 ? `调休上班 ${summary.makeupWorkdays} 天` : '',
+  ]
+    .filter(Boolean)
+    .join('，')
+
+  return [
+    `自然跨度：${formatTaskExecutionRange(task)}，共 ${summary.naturalDays} 天。`,
+    `默认可执行：${summary.workDays} 个工作日；默认不可执行：${summary.restDays} 天。`,
+    restDetail ? `日历口径：${restDetail}。` : '',
+    '遇到节假日加班或个人请假时，建议作为人员日历例外维护，不直接改需求自然起止日期。',
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+function buildTaskRestSegments(input: {
+  clippedStart: Date
+  clippedEnd: Date
+  visibleDuration: number
+  holidayCalendarMap?: Map<string, HolidayCalendarDayInfo>
+}) {
+  const { clippedEnd, clippedStart, holidayCalendarMap, visibleDuration } = input
+  const segments: TaskCalendarSegment[] = []
+  let segmentStartIndex: number | null = null
+  let segmentEndIndex = -1
+
+  Array.from({ length: visibleDuration }, (_, index) => addCalendarDays(clippedStart, index)).forEach(
+    (date, index) => {
+      const isRestDay = !isDefaultWorkingDay(date, holidayCalendarMap)
+
+      if (isRestDay) {
+        segmentStartIndex = segmentStartIndex ?? index
+        segmentEndIndex = index
+        return
+      }
+
+      if (segmentStartIndex !== null) {
+        const segmentStart = addCalendarDays(clippedStart, segmentStartIndex)
+        const segmentEnd = addCalendarDays(clippedStart, segmentEndIndex)
+        const segmentDuration = segmentEndIndex - segmentStartIndex + 1
+
+        segments.push({
+          key: `${formatDateInputValue(segmentStart)}-${formatDateInputValue(segmentEnd)}`,
+          left: `${(segmentStartIndex / visibleDuration) * 100}%`,
+          width: `${(segmentDuration / visibleDuration) * 100}%`,
+          label: segmentDuration >= 2 ? `${segmentDuration}天休` : '休',
+        })
+
+        segmentStartIndex = null
+        segmentEndIndex = -1
+      }
+    },
+  )
+
+  if (segmentStartIndex !== null) {
+    const segmentStart = addCalendarDays(clippedStart, segmentStartIndex)
+    const segmentDuration = diffCalendarDays(clippedEnd, segmentStart) + 1
+
+    segments.push({
+      key: `${formatDateInputValue(segmentStart)}-${formatDateInputValue(clippedEnd)}`,
+      left: `${(segmentStartIndex / visibleDuration) * 100}%`,
+      width: `${(segmentDuration / visibleDuration) * 100}%`,
+      label: segmentDuration >= 2 ? `${segmentDuration}天休` : '休',
+    })
+  }
+
+  return segments
+}
+
 function formatCalendarDateLabel(date: Date) {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -965,6 +1174,10 @@ function formatMonthRangeLabel(date: Date) {
 
 function formatTimelineRangeLabel(startDate: Date, endDate: Date) {
   return `${formatShortDateLabel(startDate)} - ${formatShortDateLabel(endDate)}`
+}
+
+function formatCompactDateRange(startDate: Date, endDate: Date) {
+  return `${startDate.getMonth() + 1}/${startDate.getDate()} - ${endDate.getMonth() + 1}/${endDate.getDate()}`
 }
 
 function formatTimelineHeading(startDate: Date, endDate: Date) {
@@ -1167,6 +1380,49 @@ function taskOverlapsWindow(task: Pick<Task, 'startOffset' | 'duration'>, window
   return taskStart <= windowEnd && taskEnd >= windowStart
 }
 
+function buildTimelineTaskLayout(tasks: Task[]): TimelineTaskLayout {
+  const laneEndOffsets: number[] = []
+  const layoutItems = tasks
+    .map((task, sourceIndex) => ({
+      task,
+      sourceIndex,
+      laneIndex: 0,
+      startOffset: task.startOffset,
+      endOffset: task.startOffset + Math.max(task.duration - 1, 0),
+    }))
+    .sort(
+      (left, right) =>
+        left.startOffset - right.startOffset ||
+        left.endOffset - right.endOffset ||
+        left.task.sortOrder - right.task.sortOrder ||
+        left.sourceIndex - right.sourceIndex,
+    )
+    .map((item) => {
+      const reusableLaneIndex = laneEndOffsets.findIndex(
+        (laneEndOffset) => item.startOffset > laneEndOffset,
+      )
+      const laneIndex = reusableLaneIndex === -1 ? laneEndOffsets.length : reusableLaneIndex
+
+      laneEndOffsets[laneIndex] = item.endOffset
+      return {
+        ...item,
+        laneIndex,
+      }
+    })
+    .sort(
+      (left, right) =>
+        left.laneIndex - right.laneIndex ||
+        left.startOffset - right.startOffset ||
+        left.task.sortOrder - right.task.sortOrder ||
+        left.sourceIndex - right.sourceIndex,
+    )
+
+  return {
+    items: layoutItems,
+    laneCount: laneEndOffsets.length,
+  }
+}
+
 function resolveDayIndexFromPointer(
   clientX: number,
   rectLeft: number,
@@ -1260,11 +1516,10 @@ function AvatarBubble({
   )
 }
 
-function getTimelineRowHeight(taskCount: number) {
-  // The timeline uses one visual lane per task. Converting that into a stable
-  // estimated row height lets us window off-screen rows and keep the DOM small
-  // when the resource list becomes large.
-  return Math.max(70, taskCount * 40 + 20)
+function getTimelineRowHeight(laneCount: number) {
+  // Use the packed visual lane count rather than raw task count, so rows stay
+  // compact when a member has many non-overlapping projects.
+  return Math.max(70, laneCount * 40 + 20)
 }
 
 function isThemePreference(value: string | null): value is ThemePreference {
@@ -1937,6 +2192,13 @@ function App() {
       visibleMonthStart,
     ],
   )
+  const taskCalendarSummaries = useMemo(
+    () =>
+      new Map(
+        workspace.tasks.map((task) => [task.id, summarizeTaskCalendarWorkload(task)] as const),
+      ),
+    [workspace.tasks],
+  )
   const focusedDayIndex = diffCalendarDays(focusedDate, visibleMonthStart)
   const isFocusedDateVisible =
     isFocusedDateInVisibleMonth && focusedDayIndex >= 0 && focusedDayIndex < timelineDays.length
@@ -2199,6 +2461,7 @@ function App() {
       )
       .map((member) => {
         const tasks = visibleMonthAnalytics.tasksByOwner[member.id] ?? []
+        const taskLayout = buildTimelineTaskLayout(tasks)
         const visibleMonthBookedHours = visibleMonthAnalytics.bookedHoursByOwner[member.id] ?? 0
         const utilization = Math.min(
           100,
@@ -2208,9 +2471,10 @@ function App() {
         return {
           member,
           tasks,
+          taskLayout,
           utilization,
           freeHours: Math.max(0, member.capacityHours - visibleMonthBookedHours),
-          rowHeight: getTimelineRowHeight(tasks.length),
+          rowHeight: getTimelineRowHeight(taskLayout.laneCount),
         }
       })
   }, [effectiveTimelineMemberFilter, visibleMonthAnalytics.bookedHoursByOwner, visibleMonthAnalytics.tasksByOwner, workspace.members])
@@ -5644,6 +5908,9 @@ function App() {
                                   {isHolidayHighlightEnabled ? '取消标记' : '标记日期'}
                                 </button>
                               </div>
+                              <p className="timeline-holiday-note">
+                                任务条保留需求自然跨度；斜纹代表默认不可执行时间。节假日加班或个人请假应作为人员日历例外单独维护，避免直接改需求起止日期。
+                              </p>
                               <div className="timeline-holiday-list">
                                 {CHINA_OFFICIAL_HOLIDAY_CALENDAR_2026.map((holiday) => (
                                   <div
@@ -5842,6 +6109,8 @@ function App() {
                                   ]
                                 })()
                               : row.tasks
+                          const rowTaskLayout =
+                            rowTasks === row.tasks ? row.taskLayout : buildTimelineTaskLayout(rowTasks)
                           const hasDragPreview = dragSelection?.memberId === row.member.id
                           const isTaskDropTarget =
                             taskTimelineInteraction?.mode === 'move' &&
@@ -5861,8 +6130,13 @@ function App() {
                           const previewEndDate = hasDragPreview
                             ? addCalendarDays(visibleMonthStart, previewEndDay)
                             : visibleMonthStart
-                          const previewLabel = `${previewStartDate.getMonth() + 1}/${previewStartDate.getDate()} - ${previewEndDate.getMonth() + 1}/${previewEndDate.getDate()}`
-                          const rowLaneCount = rowTasks.length + (hasDragPreview ? 1 : 0)
+                          const previewSummary = hasDragPreview
+                            ? summarizeCalendarWorkload(previewStartDate, previewEndDate)
+                            : null
+                          const previewLabel = previewSummary
+                            ? `${formatCompactDateRange(previewStartDate, previewEndDate)} · ${formatTaskWorkloadLabel(previewSummary)}`
+                            : formatCompactDateRange(previewStartDate, previewEndDate)
+                          const rowLaneCount = rowTaskLayout.laneCount + (hasDragPreview ? 1 : 0)
                           const isRowBeingReordered = memberRowReorder?.memberId === row.member.id
                           const rowDragOffset = isRowBeingReordered
                             ? memberRowReorder.currentY - memberRowReorder.startY
@@ -5922,14 +6196,14 @@ function App() {
                                     style={{
                                       left: previewLeft,
                                       width: previewWidth,
-                                      top: `${rowTasks.length * 40 + 10}px`,
+                                      top: `${rowTaskLayout.laneCount * 40 + 10}px`,
                                     }}
                                   >
                                     <span>{previewLabel}</span>
                                   </div>
                                 ) : null}
 
-                                {rowTasks.map((task, index) => {
+                                {rowTaskLayout.items.map(({ laneIndex, sourceIndex, task }) => {
                                   const taskStartDate = getTaskStartDate(task)
                                   const taskEndDate = getTaskEndDate(task)
                                   const clippedStart =
@@ -5945,6 +6219,20 @@ function App() {
                                   const width = `${Math.max(4, (visibleDuration / timelineDays.length) * 100)}%`
                                   const owner = membersById[task.ownerId]
                                   const priorityMeta = priorityPalette[task.priority]
+                                  const taskCalendarSummary =
+                                    taskCalendarSummaries.get(task.id) ?? summarizeTaskCalendarWorkload(task)
+                                  const taskRestSegments = isHolidayHighlightEnabled
+                                    ? buildTaskRestSegments({
+                                        clippedEnd,
+                                        clippedStart,
+                                        holidayCalendarMap: CHINA_OFFICIAL_HOLIDAY_CALENDAR_MAP_2026,
+                                        visibleDuration,
+                                      })
+                                    : []
+                                  const taskWorkloadTooltip = formatTaskWorkloadTooltip(
+                                    task,
+                                    taskCalendarSummary,
+                                  )
                                   const isTaskSelected = task.id === selectedTaskId
                                   const isTaskCoached = taskCoach?.taskId === task.id
                                   const isTaskBeingManipulated =
@@ -5955,6 +6243,7 @@ function App() {
                                       key={task.id}
                                       className={[
                                         'task-bar',
+                                        taskCalendarSummary.restDays > 0 ? 'has-calendar-risk' : '',
                                         isTaskSelected ? 'is-selected' : '',
                                         isTaskCoached ? 'is-coached' : '',
                                         isTaskBeingManipulated ? 'is-manipulating' : '',
@@ -5964,17 +6253,39 @@ function App() {
                                       style={{
                                         left,
                                         width,
-                                        top: `${index * 40 + 10}px`,
+                                        top: `${laneIndex * 40 + 10}px`,
                                         background: priorityMeta.solid,
                                       }}
                                       onClick={() => handleSelectTask(task.id, { fromTimeline: true })}
                                       onMouseDown={(event) =>
-                                        startTaskTimelineInteraction(event, task, 'move', index)
+                                        startTaskTimelineInteraction(event, task, 'move', sourceIndex)
                                       }
                                       onContextMenu={(event) => openContextMenu(event, task.id)}
-                                      aria-label={`${task.title}，负责人 ${owner?.name ?? '未分配'}，优先级 ${task.priority}，进度 ${task.progress}%`}
+                                      title={taskWorkloadTooltip}
+                                      aria-label={`${task.title}，负责人 ${owner?.name ?? '未分配'}，优先级 ${task.priority}，进度 ${task.progress}%，${formatTaskWorkloadLabel(taskCalendarSummary)}`}
                                     >
+                                      {taskRestSegments.length > 0 ? (
+                                        <span className="task-calendar-segments" aria-hidden="true">
+                                          {taskRestSegments.map((segment) => (
+                                            <span
+                                              key={segment.key}
+                                              className="task-calendar-segment is-rest"
+                                              style={{
+                                                left: segment.left,
+                                                width: segment.width,
+                                              }}
+                                            >
+                                              <span>{segment.label}</span>
+                                            </span>
+                                          ))}
+                                        </span>
+                                      ) : null}
                                       <span className="task-title">{task.title}</span>
+                                      {taskCalendarSummary.restDays > 0 ? (
+                                        <span className="task-workload-badge">
+                                          {formatTaskWorkloadLabel(taskCalendarSummary)}
+                                        </span>
+                                      ) : null}
                                       <em className="priority-pill task-priority-pill">
                                         {task.priority}
                                       </em>

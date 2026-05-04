@@ -1309,6 +1309,17 @@
   min-width: 260px;
 }
 
+.timeline-holiday-note {
+  background: rgba(85, 104, 255, 0.07);
+  border: 1px solid rgba(85, 104, 255, 0.12);
+  border-radius: 12px;
+  color: #65718b;
+  font-size: 11px;
+  line-height: 1.55;
+  margin: 0;
+  padding: 8px 10px;
+}
+
 .timeline-holiday-list {
   display: grid;
   gap: 8px;
@@ -1917,6 +1928,10 @@
   z-index: 2;
 }
 
+.task-bar.has-calendar-risk {
+  box-shadow: 0 8px 14px rgba(44, 63, 117, 0.12), inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
 .task-bar:hover,
 .table-row:hover,
 .ghost-button:hover,
@@ -1942,6 +1957,50 @@
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.16), 0 12px 22px rgba(44, 63, 117, 0.18);
 }
 
+.task-calendar-segments {
+  border-radius: inherit;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: absolute;
+  z-index: 0;
+}
+
+.task-calendar-segment {
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  position: absolute;
+  top: 0;
+}
+
+.task-calendar-segment.is-rest {
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.18), rgba(15, 23, 42, 0.1)),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.28) 0,
+      rgba(255, 255, 255, 0.28) 4px,
+      rgba(255, 255, 255, 0.08) 4px,
+      rgba(255, 255, 255, 0.08) 8px
+    );
+  box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.2), inset -1px 0 0 rgba(15, 23, 42, 0.12);
+}
+
+.task-calendar-segment span {
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0 3px;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(15, 23, 42, 0.26);
+  white-space: nowrap;
+}
+
 .task-bar span,
 .task-bar small {
   overflow: hidden;
@@ -1957,7 +2016,24 @@
   letter-spacing: 0.01em;
   line-height: 1.05;
   min-width: 0;
+  position: relative;
   text-shadow: 0 1px 1px rgba(15, 23, 42, 0.18);
+  z-index: 1;
+}
+
+.task-workload-badge {
+  background: rgba(15, 23, 42, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.94);
+  flex: 0 0 auto;
+  font-size: 8px;
+  font-weight: 900;
+  line-height: 1;
+  padding: 3px 5px;
+  position: relative;
+  text-shadow: 0 1px 1px rgba(15, 23, 42, 0.18);
+  z-index: 1;
 }
 
 .task-priority-pill {
@@ -1967,7 +2043,9 @@
   flex-shrink: 0;
   min-width: auto;
   padding: 0;
+  position: relative;
   text-shadow: 0 1px 1px rgba(15, 23, 42, 0.18);
+  z-index: 1;
 }
 
 .task-resize-handle {
@@ -1979,6 +2057,7 @@
   top: 5px;
   transition: opacity 160ms ease, background 160ms ease;
   width: 6px;
+  z-index: 3;
 }
 
 .task-resize-handle.is-start {
@@ -2055,6 +2134,7 @@
   padding-left: 2px;
   position: relative;
   text-shadow: 0 1px 1px rgba(15, 23, 42, 0.14);
+  z-index: 1;
 }
 
 .task-progress-pill::before {
@@ -3674,6 +3754,7 @@
 .dashboard-shell.theme-dark .detail-card,
 .dashboard-shell.theme-dark .overview-selection-bar,
 .dashboard-shell.theme-dark .overview-filter-popover,
+.dashboard-shell.theme-dark .timeline-holiday-note,
 .dashboard-shell.theme-dark .timeline-holiday-item,
 .dashboard-shell.theme-dark .month-chip,
 .dashboard-shell.theme-dark .date-jump-popover,
@@ -3892,6 +3973,7 @@
 .dashboard-shell.theme-dark .resource-task-status,
 .dashboard-shell.theme-dark .date-jump-header small,
 .dashboard-shell.theme-dark .date-jump-field span,
+.dashboard-shell.theme-dark .timeline-holiday-note,
 .dashboard-shell.theme-dark .timeline-holiday-item span,
 .dashboard-shell.theme-dark .activity-launcher-copy small,
 .dashboard-shell.theme-dark .activity-modal-head span,
@@ -4005,6 +4087,11 @@
 
 .dashboard-shell.theme-dark .timeline-holiday-item {
   background: linear-gradient(180deg, rgba(24, 35, 60, 0.94) 0%, rgba(16, 24, 42, 0.96) 100%);
+}
+
+.dashboard-shell.theme-dark .timeline-holiday-note {
+  background: rgba(108, 123, 255, 0.12);
+  border-color: rgba(108, 123, 255, 0.18);
 }
 
 .dashboard-shell.theme-dark .month-chip,

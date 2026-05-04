@@ -68,7 +68,7 @@ def _read_bearer_token() -> str:
 
     authorization = request.headers.get("Authorization", "")
     if authorization.startswith("Bearer "):
-        return authorization.removeprefix("Bearer ").strip()
+        return authorization[len("Bearer ") :].strip()
     return request.headers.get("X-Auth-Token", "").strip()
 
 
