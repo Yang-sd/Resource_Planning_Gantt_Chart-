@@ -439,6 +439,17 @@ const CHINA_OFFICIAL_HOLIDAY_CALENDAR_MAP_2026 = buildHolidayCalendarMap(
 
 const SEEDED_UPDATE_RECORDS: ReleaseRecord[] = [
   {
+    id: 'release-21',
+    version: 'v1.10.3',
+    updatedAt: '2026/05/05 07:20',
+    features: [
+      '登录页移除默认账号密码展示，并改为空账号空密码输入，避免公网入口泄露测试口令。',
+      '登录态迁移为 HttpOnly Cookie，前端不再把长期 token 存到 localStorage，降低脚本读取风险。',
+      '后端新增登录失败限流、安全响应头和请求体大小限制，降低暴力尝试、点击劫持和异常大请求风险。',
+      '管理员初始密码改为环境变量控制，并补充命令行改密工具，生产环境无需把真实密码写入代码。',
+    ],
+  },
+  {
     id: 'release-20',
     version: 'v1.10.2',
     updatedAt: '2026/05/04 22:20',
@@ -1725,8 +1736,8 @@ function App() {
   const [isExporting, setIsExporting] = useState(false)
   const [currentAccount, setCurrentAccount] = useState<Account | null>(null)
   const [isAuthChecking, setIsAuthChecking] = useState(() => Boolean(getAuthToken()))
-  const [loginUsername, setLoginUsername] = useState('admin')
-  const [loginPassword, setLoginPassword] = useState('admin')
+  const [loginUsername, setLoginUsername] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
   const [loginError, setLoginError] = useState<string | null>(null)
   const [isLoginSubmitting, setIsLoginSubmitting] = useState(false)
   const [profileEditor, setProfileEditor] = useState<ProfileEditorState>(null)
@@ -4597,12 +4608,6 @@ function App() {
               {isLoginSubmitting ? '登录中...' : '登录'}
             </button>
           </form>
-          <div className="login-hint">
-            <strong>默认账号</strong>
-            <span>管理员：admin / admin</span>
-            <span>团队负责人：linqing、zhouyi、xuheng / 123456</span>
-            <span>普通成员：mina / 123456</span>
-          </div>
         </section>
       </div>
     )

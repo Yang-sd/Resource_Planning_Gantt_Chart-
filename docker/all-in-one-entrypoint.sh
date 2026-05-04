@@ -4,6 +4,7 @@ set -Eeuo pipefail
 export PATH="/opt/resource-planning-venv/bin:${PATH}"
 export APP_TIMEZONE="${APP_TIMEZONE:-Asia/Shanghai}"
 export SECRET_KEY="${SECRET_KEY:-resource-planning-single-container-secret}"
+export ADMIN_INITIAL_PASSWORD="${ADMIN_INITIAL_PASSWORD:-admin}"
 export AUTH_TOKEN_MAX_AGE_SECONDS="${AUTH_TOKEN_MAX_AGE_SECONDS:-604800}"
 export AVATAR_UPLOAD_MAX_BYTES="${AVATAR_UPLOAD_MAX_BYTES:-10485760}"
 

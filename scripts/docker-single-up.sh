@@ -24,6 +24,7 @@ docker run -d \
   -v "$DATA_VOLUME:/var/lib/mysql" \
   -e APP_TIMEZONE="${APP_TIMEZONE:-Asia/Shanghai}" \
   -e SECRET_KEY="${SECRET_KEY:-resource-planning-single-container-secret}" \
+  -e ADMIN_INITIAL_PASSWORD="${ADMIN_INITIAL_PASSWORD:-admin}" \
   -e MYSQL_DATABASE="${MYSQL_DATABASE:-resource_planning}" \
   -e MYSQL_USER="${MYSQL_USER:-resource_planning}" \
   -e MYSQL_PASSWORD="${MYSQL_PASSWORD:-resource_planning}" \

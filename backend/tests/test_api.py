@@ -9,6 +9,8 @@ TINY_GIF_DATA_URL = "data:image/gif;base64,R0lGODlhAQABAAAAACw="
 def _auth_headers(client, username: str = "admin", password: str = "admin") -> dict[str, str]:
     login_response = client.post("/api/auth/login", json={"username": username, "password": password})
     assert login_response.status_code == 200
+    assert "HttpOnly" in login_response.headers["Set-Cookie"]
+    assert "SameSite=Lax" in login_response.headers["Set-Cookie"]
     token = login_response.get_json()["token"]
     return {"Authorization": f"Bearer {token}"}
 
@@ -19,6 +21,8 @@ def test_health_and_bootstrap_returns_seed_data(client):
     health_response = client.get("/api/health")
     assert health_response.status_code == 200
     assert health_response.get_json() == {"status": "ok"}
+    assert health_response.headers["X-Content-Type-Options"] == "nosniff"
+    assert health_response.headers["X-Frame-Options"] == "DENY"
 
     unauthenticated_bootstrap = client.get("/api/bootstrap")
     assert unauthenticated_bootstrap.status_code == 401
@@ -41,6 +45,20 @@ def test_health_and_bootstrap_returns_seed_data(client):
     account = me_response.get_json()["account"]
     assert account["username"] == "admin"
     assert account["permissions"]["canManageOrganization"] is True
+
+    cookie_only_me_response = client.get("/api/auth/me")
+    assert cookie_only_me_response.status_code == 200
+
+
+def test_login_rate_limit_slows_repeated_failures(client):
+    """Repeated bad passwords should be throttled before they become noisy scans."""
+
+    for _ in range(5):
+        response = client.post("/api/auth/login", json={"username": "ghost", "password": "wrong"})
+        assert response.status_code == 401
+
+    locked_response = client.post("/api/auth/login", json={"username": "ghost", "password": "wrong"})
+    assert locked_response.status_code == 429
 
 
 def test_create_update_delete_team_member_and_task_flow(client):

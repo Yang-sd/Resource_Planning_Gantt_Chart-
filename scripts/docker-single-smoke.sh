@@ -69,7 +69,7 @@ if 'id="root"' not in html:
 login = request(
     "/api/auth/login",
     method="POST",
-    data={"username": "admin", "password": "admin"},
+    data={"username": "admin", "password": os.environ.get("ADMIN_INITIAL_PASSWORD", "admin")},
     auth=False,
 )
 TOKEN = login["token"]

@@ -86,6 +86,7 @@ docker run -d \
   -p "$API_PORT:8000" \
   -e DATABASE_URL='mysql+pymysql://resource_planning:resource_planning@mysql:3306/resource_planning?charset=utf8mb4' \
   -e APP_TIMEZONE=Asia/Shanghai \
+  -e ADMIN_INITIAL_PASSWORD="${ADMIN_INITIAL_PASSWORD:-admin}" \
   --health-cmd="python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()\"" \
   --health-interval=10s \
   --health-timeout=5s \

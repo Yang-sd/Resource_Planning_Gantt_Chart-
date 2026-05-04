@@ -164,17 +164,17 @@ All-in-one Container
 - `GET /api/operation-records?page=1&size=10`
 - `POST /api/operation-records/view`
 
-## 默认账号
+## 初始账号与密码策略
 
-| 账号 | 密码 | 角色 |
-| --- | --- | --- |
-| `admin` | `admin` | 管理员 |
-| `linqing` | `123456` | 团队负责人 |
-| `zhouyi` | `123456` | 团队负责人 |
-| `xuheng` | `123456` | 团队负责人 |
-| `mina` | `123456` | 普通成员 |
+数据库首次初始化时会创建管理员账号 `admin`，初始密码由 `ADMIN_INITIAL_PASSWORD` 环境变量控制。真实生产密码不应写入 Git，也不应展示在登录页。
 
 新增成员时会自动创建账号，初始密码为 `123456`。
+
+已上线的账号可通过管理命令轮换密码：
+
+```bash
+ACCOUNT_PASSWORD='new-secret' python -m backend.manage set-password --username admin
+```
 
 ## 性能设计
 

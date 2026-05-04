@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from flask import current_app
 from werkzeug.security import generate_password_hash
 
 from .extensions import db
@@ -10,6 +11,17 @@ from .services import now_local
 
 
 SEEDED_RELEASE_RECORDS = [
+    {
+        "id": "release-21",
+        "version": "v1.10.3",
+        "updated_at": datetime(2026, 5, 5, 7, 20),
+        "features": [
+            "登录页移除默认账号密码展示，并改为空账号空密码输入，避免公网入口泄露测试口令。",
+            "登录态迁移为 HttpOnly Cookie，前端不再把长期 token 存到 localStorage，降低脚本读取风险。",
+            "后端新增登录失败限流、安全响应头和请求体大小限制，降低暴力尝试、点击劫持和异常大请求风险。",
+            "管理员初始密码改为环境变量控制，并补充命令行改密工具，生产环境无需把真实密码写入代码。",
+        ],
+    },
     {
         "id": "release-20",
         "version": "v1.10.2",
@@ -222,7 +234,7 @@ def _seed_default_accounts() -> None:
         {
             "id": "account-admin",
             "username": "admin",
-            "password": "admin",
+            "password": current_app.config["ADMIN_INITIAL_PASSWORD"],
             "role": "admin",
             "member_id": None,
             "display_name": "管理员",

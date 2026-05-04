@@ -70,7 +70,7 @@ if proxied_health.get("status") != "ok":
 login = request(
     f"http://127.0.0.1:{API_PORT}/api/auth/login",
     method="POST",
-    data={"username": "admin", "password": "admin"},
+    data={"username": "admin", "password": os.environ.get("ADMIN_INITIAL_PASSWORD", "admin")},
     auth=False,
 )
 AUTH_TOKEN = login["token"]

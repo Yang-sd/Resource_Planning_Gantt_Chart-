@@ -113,16 +113,18 @@ export type BootstrapResponse = {
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
-const AUTH_TOKEN_STORAGE_KEY = 'resource-planning-auth-token'
+const LEGACY_AUTH_TOKEN_STORAGE_KEY = 'resource-planning-auth-token'
 
-let authToken =
-  typeof window === 'undefined' ? '' : window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) ?? ''
+let authToken = ''
+
+if (typeof window !== 'undefined') {
+  // Authentication has moved to an HttpOnly cookie. Removing the old key keeps
+  // previously opened browsers from carrying a script-readable bearer token.
+  window.localStorage.removeItem(LEGACY_AUTH_TOKEN_STORAGE_KEY)
+}
 
 export function setAuthToken(token: string) {
   authToken = token
-  if (typeof window !== 'undefined') {
-    window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token)
-  }
 }
 
 export function getAuthToken() {
@@ -132,7 +134,7 @@ export function getAuthToken() {
 export function clearAuthToken() {
   authToken = ''
   if (typeof window !== 'undefined') {
-    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+    window.localStorage.removeItem(LEGACY_AUTH_TOKEN_STORAGE_KEY)
   }
 }
 
@@ -141,6 +143,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // the fetch/error-handling cost once and can keep the page modules focused on
   // business logic instead of repeated transport boilerplate.
   const response = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
@@ -339,6 +342,7 @@ export async function deleteTask(taskId: string) {
 
 export async function exportWorkspaceSnapshot() {
   const response = await fetch(`${API_BASE_URL}/export/workspace`, {
+    credentials: 'include',
     headers: {
       ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
     },

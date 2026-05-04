@@ -5,6 +5,7 @@ import binascii
 from functools import wraps
 from math import ceil
 import re
+from time import monotonic
 
 from flask import Response, current_app, g, jsonify, request
 from sqlalchemy import func, or_, select
@@ -40,6 +41,7 @@ from . import api_blueprint
 
 ALLOWED_AVATAR_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 AVATAR_DATA_URL_PATTERN = re.compile(r"^data:(?P<mime>image/[a-zA-Z0-9.+-]+);base64,(?P<data>.+)$", re.DOTALL)
+_LOGIN_FAILURES: dict[tuple[str, str], list[float]] = {}
 
 
 def _json_error(
@@ -72,12 +74,53 @@ def _issue_auth_token(account: Account) -> str:
 
 
 def _read_bearer_token() -> str:
-    """Read the auth token from Authorization or a fallback header."""
+    """Read the auth token from short-lived headers or the HttpOnly cookie.
+
+    The SPA now relies on an HttpOnly cookie so browser scripts cannot read the
+    token. Header support remains for smoke tests and older already-open tabs.
+    """
 
     authorization = request.headers.get("Authorization", "")
     if authorization.startswith("Bearer "):
         return authorization[len("Bearer ") :].strip()
-    return request.headers.get("X-Auth-Token", "").strip()
+
+    header_token = request.headers.get("X-Auth-Token", "").strip()
+    if header_token:
+        return header_token
+
+    cookie_name = current_app.config["AUTH_COOKIE_NAME"]
+    return request.cookies.get(cookie_name, "").strip()
+
+
+def _is_https_request() -> bool:
+    """Honor Cloudflare/Gunicorn proxy headers when deciding cookie security."""
+
+    return request.headers.get("X-Forwarded-Proto", request.scheme) == "https"
+
+
+def _set_auth_cookie(response: Response, token: str) -> None:
+    """Persist the signed token in a HttpOnly cookie instead of localStorage."""
+
+    response.set_cookie(
+        current_app.config["AUTH_COOKIE_NAME"],
+        token,
+        max_age=int(current_app.config["AUTH_TOKEN_MAX_AGE_SECONDS"]),
+        httponly=True,
+        secure=_is_https_request(),
+        samesite="Lax",
+        path="/",
+    )
+
+
+def _clear_auth_cookie(response: Response) -> None:
+    """Remove the browser auth cookie during logout or forced re-login."""
+
+    response.delete_cookie(
+        current_app.config["AUTH_COOKIE_NAME"],
+        secure=_is_https_request(),
+        samesite="Lax",
+        path="/",
+    )
 
 
 def _load_current_account() -> Account | None:
@@ -213,6 +256,54 @@ def _build_avatar_response(mime_type: str | None, image_data: str | None, update
     response.cache_control.max_age = 60 * 60 * 24
     response.set_etag(f"{len(image_data)}-{int(updated_at.timestamp())}")
     return response.make_conditional(request)
+
+
+def _client_ip_for_rate_limit() -> str:
+    """Resolve the real browser IP when the app sits behind Cloudflare Tunnel."""
+
+    cloudflare_ip = request.headers.get("CF-Connecting-IP", "").strip()
+    if cloudflare_ip:
+        return cloudflare_ip
+
+    forwarded_for = request.headers.get("X-Forwarded-For", "").split(",", 1)[0].strip()
+    if forwarded_for:
+        return forwarded_for
+
+    return request.remote_addr or "unknown"
+
+
+def _login_rate_key(username: str) -> tuple[str, str]:
+    """Bucket login failures by client IP and username to slow brute-force scans."""
+
+    return (_client_ip_for_rate_limit(), username.lower())
+
+
+def _is_login_rate_limited(username: str) -> bool:
+    """Return True once recent failed attempts cross the configured threshold."""
+
+    now = monotonic()
+    lock_seconds = int(current_app.config["LOGIN_LOCK_SECONDS"])
+    attempts = [
+        attempted_at
+        for attempted_at in _LOGIN_FAILURES.get(_login_rate_key(username), [])
+        if now - attempted_at < lock_seconds
+    ]
+    _LOGIN_FAILURES[_login_rate_key(username)] = attempts
+    return len(attempts) >= int(current_app.config["LOGIN_MAX_ATTEMPTS"])
+
+
+def _record_login_failure(username: str) -> None:
+    """Remember a failed login without writing sensitive password data to logs."""
+
+    key = _login_rate_key(username)
+    attempts = _LOGIN_FAILURES.setdefault(key, [])
+    attempts.append(monotonic())
+
+
+def _clear_login_failures(username: str) -> None:
+    """Clear the local failure bucket after a successful authentication."""
+
+    _LOGIN_FAILURES.pop(_login_rate_key(username), None)
 
 
 def _generate_unique_username(preferred_name: str, fallback: str) -> str:
@@ -509,15 +600,22 @@ def login() -> Response:
     if not username or not password:
         return _json_error("请输入账号和密码。", 400)
 
+    if _is_login_rate_limited(username):
+        return _json_error("登录失败次数过多，请稍后再试。", 429)
+
     account = Account.query.filter(func.lower(Account.username) == username.lower()).first()
     if account is None or not account.is_active or not check_password_hash(account.password_hash, password):
+        _record_login_failure(username)
         return _json_error("账号或密码不正确。", 401)
 
+    _clear_login_failures(username)
     token = _issue_auth_token(account)
     actor = _actor_label(account)
     append_operation_record("查看", "登录", f"{actor} 登录了项目排期工作台。", actor=actor)
     db.session.commit()
-    return jsonify({"token": token, "account": _serialize_current_account(account)})
+    response = jsonify({"token": token, "account": _serialize_current_account(account)})
+    _set_auth_cookie(response, token)
+    return response
 
 
 @api_blueprint.get("/auth/me")
@@ -533,7 +631,9 @@ def logout() -> Response:
     actor = _actor_label()
     append_operation_record("查看", "退出登录", f"{actor} 退出了当前登录会话。", actor=actor)
     db.session.commit()
-    return jsonify({"success": True})
+    response = jsonify({"success": True})
+    _clear_auth_cookie(response)
+    return response
 
 
 @api_blueprint.patch("/auth/profile")

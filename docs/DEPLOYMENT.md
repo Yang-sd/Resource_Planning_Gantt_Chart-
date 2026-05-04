@@ -234,6 +234,7 @@ WEB_PORT=8081 bash scripts/docker-smoke.sh
 当前仓库默认配置为了本地部署体验，生产环境建议至少调整：
 
 - `SECRET_KEY`：替换为高强度随机值。
+- `ADMIN_INITIAL_PASSWORD`：仅用于首次初始化管理员账号，生产环境必须设置为强密码。
 - `MYSQL_PASSWORD` 和 `MYSQL_ROOT_PASSWORD`：替换默认密码。
 - `AUTH_TOKEN_MAX_AGE_SECONDS`：按企业登录安全策略设置。
 - 端口暴露：生产环境建议只暴露前端入口，MySQL 不直接暴露公网。

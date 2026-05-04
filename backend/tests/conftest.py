@@ -135,6 +135,7 @@ def app(mysql_database_url: str):
         TESTING = True
         SQLALCHEMY_DATABASE_URI = mysql_database_url
         SEED_ON_START = False
+        ADMIN_INITIAL_PASSWORD = "admin"
 
     app = create_app(TestConfig)
 
