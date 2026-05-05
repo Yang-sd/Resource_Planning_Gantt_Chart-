@@ -12,6 +12,16 @@ from .services import now_local
 
 SEEDED_RELEASE_RECORDS = [
     {
+        "id": "release-23",
+        "version": "v1.11.1",
+        "updated_at": datetime(2026, 5, 5, 8, 6),
+        "features": [
+            "资源排期项目条交互升级为 Pointer Events，手机触控也可以拖动项目、上下移交成员和调整排期。",
+            "移动端项目条两端拉伸手柄改为常显大触控区，降低误触和点不到的问题。",
+            "移动端选中项目后新增编辑、删除快捷操作，解决手机无法使用右键菜单删除项目的问题。",
+        ],
+    },
+    {
         "id": "release-22",
         "version": "v1.11.0",
         "updated_at": datetime(2026, 5, 5, 7, 50),

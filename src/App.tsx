@@ -4,6 +4,7 @@ import type {
   FocusEvent as ReactFocusEvent,
   FormEvent as ReactFormEvent,
   MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
   UIEvent as ReactUIEvent,
 } from 'react'
 import {
@@ -438,6 +439,16 @@ const CHINA_OFFICIAL_HOLIDAY_CALENDAR_MAP_2026 = buildHolidayCalendarMap(
 )
 
 const SEEDED_UPDATE_RECORDS: ReleaseRecord[] = [
+  {
+    id: 'release-23',
+    version: 'v1.11.1',
+    updatedAt: '2026/05/05 08:06',
+    features: [
+      '资源排期项目条交互升级为 Pointer Events，手机触控也可以拖动项目、上下移交成员和调整排期。',
+      '移动端项目条两端拉伸手柄改为常显大触控区，降低误触和点不到的问题。',
+      '移动端选中项目后新增编辑、删除快捷操作，解决手机无法使用右键菜单删除项目的问题。',
+    ],
+  },
   {
     id: 'release-22',
     version: 'v1.11.0',
@@ -3027,12 +3038,17 @@ function App() {
     commitWheelMonthSwitch(horizontalDelta)
   }
 
-  const startTimelineBrowse = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (event.button !== 0) {
+  const isPrimaryPointerActivation = <T extends HTMLElement>(event: ReactPointerEvent<T>) => {
+    return event.pointerType === 'mouse' ? event.button === 0 : event.isPrimary
+  }
+
+  const startTimelineBrowse = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isPrimaryPointerActivation(event)) {
       return
     }
 
     event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
     timelineBrowseRef.current = {
       lastX: event.clientX,
       stepWidth: Math.max(event.currentTarget.getBoundingClientRect().width / Math.max(timelineDays.length, 1), 1),
@@ -3040,10 +3056,10 @@ function App() {
   }
 
   const startMemberRowReorder = (
-    event: ReactMouseEvent<HTMLDivElement>,
+    event: ReactPointerEvent<HTMLDivElement>,
     memberId: string,
   ) => {
-    if (event.button !== 0 || isTaskTimelineInteracting || isDraggingSelection) {
+    if (!isPrimaryPointerActivation(event) || isTaskTimelineInteracting || isDraggingSelection) {
       return
     }
 
@@ -3056,6 +3072,7 @@ function App() {
 
     event.preventDefault()
     event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
     setContextMenu(null)
     setPendingTaskCoachId(null)
     setTaskCoach(null)
@@ -3102,7 +3119,7 @@ function App() {
   }, [activeNav, isTaskTimelineInteracting, pendingTaskCoachId])
 
   useEffect(() => {
-    const handleMouseMove = (event: MouseEvent) => {
+    const handlePointerMove = (event: PointerEvent) => {
       const currentBrowse = timelineBrowseRef.current
       if (!currentBrowse) {
         return
@@ -3122,16 +3139,18 @@ function App() {
       commitTimelineBrowse(dayShift)
     }
 
-    const handleMouseUp = () => {
+    const stopTimelineBrowse = () => {
       timelineBrowseRef.current = null
     }
 
-    window.addEventListener('mousemove', handleMouseMove)
-    window.addEventListener('mouseup', handleMouseUp)
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', stopTimelineBrowse)
+    window.addEventListener('pointercancel', stopTimelineBrowse)
 
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove)
-      window.removeEventListener('mouseup', handleMouseUp)
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', stopTimelineBrowse)
+      window.removeEventListener('pointercancel', stopTimelineBrowse)
     }
   }, [])
 
@@ -3312,12 +3331,12 @@ function App() {
   }
 
   const startTaskTimelineInteraction = (
-    event: ReactMouseEvent<HTMLElement>,
+    event: ReactPointerEvent<HTMLElement>,
     task: Task,
     mode: TaskTimelineInteractionMode,
     laneIndex = 0,
   ) => {
-    if (event.button !== 0) {
+    if (!isPrimaryPointerActivation(event)) {
       return
     }
 
@@ -3328,6 +3347,7 @@ function App() {
 
     event.preventDefault()
     event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
     setContextMenu(null)
     setPendingTaskCoachId(null)
     setTaskCoach(null)
@@ -3934,7 +3954,7 @@ function App() {
       return
     }
 
-    const handleMouseMove = (event: MouseEvent) => {
+    const handlePointerMove = (event: PointerEvent) => {
       const currentInteraction = taskTimelineInteractionRef.current
       if (!currentInteraction) {
         return
@@ -4152,12 +4172,14 @@ function App() {
       })()
     }
 
-    window.addEventListener('mousemove', handleMouseMove)
-    window.addEventListener('mouseup', handleMouseUp)
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handleMouseUp)
+    window.addEventListener('pointercancel', handleMouseUp)
 
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove)
-      window.removeEventListener('mouseup', handleMouseUp)
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handleMouseUp)
+      window.removeEventListener('pointercancel', handleMouseUp)
     }
   }, [isTaskTimelineInteracting, membersById, refreshWorkspace, visibleMonthAnalytics.taskCountByOwner, visibleMonthEnd, visibleMonthStart, workspace.tasks])
 
@@ -4166,7 +4188,7 @@ function App() {
       return
     }
 
-    const handleMouseMove = (event: MouseEvent) => {
+    const handlePointerMove = (event: PointerEvent) => {
       const currentReorder = memberRowReorderRef.current
       if (!currentReorder) {
         return
@@ -4255,12 +4277,14 @@ function App() {
       })()
     }
 
-    window.addEventListener('mousemove', handleMouseMove)
-    window.addEventListener('mouseup', handleMouseUp)
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handleMouseUp)
+    window.addEventListener('pointercancel', handleMouseUp)
 
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove)
-      window.removeEventListener('mouseup', handleMouseUp)
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handleMouseUp)
+      window.removeEventListener('pointercancel', handleMouseUp)
     }
   }, [isMemberRowReordering, membersById, refreshWorkspace, workspace.members])
 
@@ -6350,7 +6374,7 @@ function App() {
                     <div className="timeline-sheet" style={timelineStyle}>
                       <div className="timeline-head">
                         <div className="name-column">成员 / 项目</div>
-                        <div className="date-grid date-grid-browse" onMouseDown={startTimelineBrowse}>
+                        <div className="date-grid date-grid-browse" onPointerDown={startTimelineBrowse}>
                           {timelineDays.map((day) => (
                             <span
                               key={day.key}
@@ -6485,7 +6509,7 @@ function App() {
                             >
                               <div
                                 className="person-meta"
-                                onMouseDown={(event) => startMemberRowReorder(event, row.member.id)}
+                                onPointerDown={(event) => startMemberRowReorder(event, row.member.id)}
                               >
                                 <strong>{row.member.name}</strong>
                               </div>
@@ -6555,8 +6579,10 @@ function App() {
                                     taskTimelineInteraction?.taskId === task.id
 
                                   return (
-                                    <button
+                                    <div
                                       key={task.id}
+                                      role="button"
+                                      tabIndex={0}
                                       className={[
                                         'task-bar',
                                         taskCalendarSummary.restDays > 0 ? 'has-calendar-risk' : '',
@@ -6573,9 +6599,20 @@ function App() {
                                         background: priorityMeta.solid,
                                       }}
                                       onClick={() => handleSelectTask(task.id, { fromTimeline: true })}
-                                      onMouseDown={(event) =>
+                                      onPointerDown={(event) =>
                                         startTaskTimelineInteraction(event, task, 'move', sourceIndex)
                                       }
+                                      onKeyDown={(event) => {
+                                        if (event.key === 'Enter' || event.key === ' ') {
+                                          event.preventDefault()
+                                          handleSelectTask(task.id, { fromTimeline: true })
+                                        }
+
+                                        if (event.key === 'Delete' || event.key === 'Backspace') {
+                                          event.preventDefault()
+                                          openDeleteConfirm(task.id)
+                                        }
+                                      }}
                                       onContextMenu={(event) => openContextMenu(event, task.id)}
                                       title={taskWorkloadTooltip}
                                       aria-label={`${task.title}，负责人 ${owner?.name ?? '未分配'}，优先级 ${task.priority}，进度 ${task.progress}%，${formatTaskWorkloadLabel(taskCalendarSummary)}`}
@@ -6606,22 +6643,46 @@ function App() {
                                         {task.priority}
                                       </em>
                                       <small className="task-progress-pill">{task.progress}%</small>
+                                      <span className="task-mobile-actions" aria-label="移动端项目操作">
+                                        <button
+                                          type="button"
+                                          aria-label={`编辑项目 ${task.title}`}
+                                          onPointerDown={(event) => event.stopPropagation()}
+                                          onClick={(event) => {
+                                            event.stopPropagation()
+                                            openEditModal(task.id)
+                                          }}
+                                        >
+                                          编辑
+                                        </button>
+                                        <button
+                                          type="button"
+                                          aria-label={`删除项目 ${task.title}`}
+                                          onPointerDown={(event) => event.stopPropagation()}
+                                          onClick={(event) => {
+                                            event.stopPropagation()
+                                            openDeleteConfirm(task.id)
+                                          }}
+                                        >
+                                          删除
+                                        </button>
+                                      </span>
                                       <span
                                         className="task-resize-handle is-start"
-                                        onMouseDown={(event) =>
+                                        onPointerDown={(event) =>
                                           startTaskTimelineInteraction(event, task, 'resize-start')
                                         }
                                       ></span>
                                       <span
                                         className="task-resize-handle is-end"
-                                        onMouseDown={(event) =>
+                                        onPointerDown={(event) =>
                                           startTaskTimelineInteraction(event, task, 'resize-end')
                                         }
                                       ></span>
                                       {isTaskCoached ? (
                                         <span className="task-coach-bubble">{taskCoach.message}</span>
                                       ) : null}
-                                    </button>
+                                    </div>
                                   )
                                 })}
                               </div>

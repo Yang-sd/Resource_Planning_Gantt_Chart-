@@ -2297,6 +2297,10 @@
   width: 1px;
 }
 
+.task-mobile-actions {
+  display: none;
+}
+
 @keyframes task-coach-pulse {
   0%,
   100% {
@@ -5083,13 +5087,20 @@
 
   .bars-column {
     min-height: 42px;
+    overflow: visible;
   }
 
   .task-bar {
     border-radius: 9px;
-    min-height: 30px;
-    padding: 5px 6px;
+    min-height: 34px;
+    padding: 5px 20px;
     touch-action: none;
+    user-select: none;
+  }
+
+  .task-bar.is-selected,
+  .task-bar:focus-visible {
+    z-index: 8;
   }
 
   .task-title {
@@ -5098,6 +5109,79 @@
 
   .task-workload-badge {
     display: none;
+  }
+
+  .task-resize-handle {
+    background: rgba(255, 255, 255, 0.46);
+    bottom: 2px;
+    opacity: 1;
+    top: 2px;
+    touch-action: none;
+    width: 14px;
+  }
+
+  .task-resize-handle::after {
+    background: rgba(255, 255, 255, 0.72);
+    border-radius: 999px;
+    content: '';
+    height: 14px;
+    left: 50%;
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 2px;
+  }
+
+  .task-resize-handle.is-start {
+    left: 2px;
+  }
+
+  .task-resize-handle.is-end {
+    right: 2px;
+  }
+
+  .task-mobile-actions {
+    align-items: center;
+    background: rgba(15, 23, 42, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 999px;
+    box-shadow: 0 14px 26px rgba(15, 23, 42, 0.26);
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    overflow: visible;
+    padding: 3px;
+    pointer-events: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 5px);
+    transform: translateY(-2px);
+    transition: opacity 140ms ease, transform 140ms ease;
+    white-space: nowrap;
+    z-index: 9;
+  }
+
+  .task-bar.is-selected .task-mobile-actions,
+  .task-bar:focus-visible .task-mobile-actions {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+
+  .task-mobile-actions button {
+    background: rgba(255, 255, 255, 0.92);
+    border: 0;
+    border-radius: 999px;
+    color: #172033;
+    font-size: 10px;
+    font-weight: 900;
+    min-height: 28px;
+    padding: 0 10px;
+  }
+
+  .task-mobile-actions button:last-child {
+    background: #ffe6e6;
+    color: #b42318;
   }
 
   .dialog {
