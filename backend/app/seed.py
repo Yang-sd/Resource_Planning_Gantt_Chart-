@@ -12,6 +12,15 @@ from .services import now_local
 
 SEEDED_RELEASE_RECORDS = [
     {
+        "id": "release-24",
+        "version": "v1.11.2",
+        "updated_at": datetime(2026, 5, 5, 8, 21),
+        "features": [
+            "修复刷新页面后前端没有主动读取 HttpOnly 登录 Cookie，导致已登录用户仍被带回登录页的问题。",
+            "刷新进入页面时先恢复当前账号，会话有效则直接进入项目排期工作台。",
+        ],
+    },
+    {
         "id": "release-23",
         "version": "v1.11.1",
         "updated_at": datetime(2026, 5, 5, 8, 6),

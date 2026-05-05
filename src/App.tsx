@@ -31,7 +31,6 @@ import {
   fetchDeletedResourceArchives,
   fetchOperationRecords,
   fetchReleaseRecords,
-  getAuthToken,
   login as loginRequest,
   logout as logoutRequest,
   type ApiAccount,
@@ -439,6 +438,15 @@ const CHINA_OFFICIAL_HOLIDAY_CALENDAR_MAP_2026 = buildHolidayCalendarMap(
 )
 
 const SEEDED_UPDATE_RECORDS: ReleaseRecord[] = [
+  {
+    id: 'release-24',
+    version: 'v1.11.2',
+    updatedAt: '2026/05/05 08:21',
+    features: [
+      '修复刷新页面后前端没有主动读取 HttpOnly 登录 Cookie，导致已登录用户仍被带回登录页的问题。',
+      '刷新进入页面时先恢复当前账号，会话有效则直接进入项目排期工作台。',
+    ],
+  },
   {
     id: 'release-23',
     version: 'v1.11.1',
@@ -1757,7 +1765,7 @@ function App() {
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true)
   const [isExporting, setIsExporting] = useState(false)
   const [currentAccount, setCurrentAccount] = useState<Account | null>(null)
-  const [isAuthChecking, setIsAuthChecking] = useState(() => Boolean(getAuthToken()))
+  const [isAuthChecking, setIsAuthChecking] = useState(true)
   const [loginUsername, setLoginUsername] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
   const [loginError, setLoginError] = useState<string | null>(null)
@@ -1922,12 +1930,6 @@ function App() {
     let cancelled = false
 
     const restoreAccountSession = async () => {
-      if (!getAuthToken()) {
-        setIsAuthChecking(false)
-        setIsWorkspaceLoading(false)
-        return
-      }
-
       try {
         const payload = await fetchCurrentAccount()
         if (!cancelled) {
@@ -1943,7 +1945,8 @@ function App() {
         }
       } catch (error) {
         if (!cancelled) {
-          setLoginError(error instanceof Error ? error.message : '登录状态已过期，请重新登录。')
+          const message = error instanceof Error ? error.message : ''
+          setLoginError(message.includes('未登录') ? null : message || '登录状态已过期，请重新登录。')
           setCurrentAccount(null)
           setIsWorkspaceLoading(false)
         }
